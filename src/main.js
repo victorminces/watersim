@@ -21,14 +21,17 @@ const { WaterAudio, SCALES } = await import('./audio.js' + V);
 // panel since there is no H key.
 const TOUCH = window.matchMedia('(pointer: coarse)').matches;
 // Grid budget, laid out to the screen aspect; the Detail slider scales it.
-const CELLS = TOUCH ? 384 * 216 : 512 * 288;
+// The waves a moving body makes are a set number of cells long (see SUBSTEPS),
+// so the grid decides how big they look. A laptop's ~265 cells across its
+// short side make ripples ~2% of it, which on a ~19 cm screen reads well; the
+// same 2% of a ~7 cm phone is fizz. Phones get ~120 cells across, so ripples
+// are ~2.5x larger relative to the screen (and the GPU has far less to do).
+const CELLS = TOUCH ? 120 * 267 : 512 * 288;
 // Wave steps per animation frame. This also sets the shortest wave the pool can
 // make: a moving contour can only emit at the distance a wave travels between
 // camera frames, so too few substeps and the body sheds grid-scale fizz instead
 // of ripples.
-// Phones get fewer: their GPUs cannot afford 16 passes, and the coarser grid
-// already makes each step cover more of the screen.
-const SUBSTEPS = TOUCH ? 10 : 16;
+const SUBSTEPS = 16;
 const MAX_DROPS = 16;             // must match uDrops[] in the splat shader
 const ZONES_X = 16, ZONES_Y = 8;  // sound grid laid over the pool
 const VEL_SCALE = 32;             // see uVelScale in the reduce shader
@@ -180,11 +183,11 @@ async function openCamera() {
     throw new Error('The camera only works over https (or on localhost). Open the https link, or run without a camera.');
   }
   bootMsg.textContent = 'Asking for the camera…';
-  // Phones get the camera's natural picture. Asking for the screen's tall,
-  // narrow shape makes the browser crop the sensor to fit, which is a heavy
-  // digital zoom; camXform below decides how to frame what arrives.
+  // Phones: of the camera's own (uncropped) modes, the one closest to the
+  // screen's shape. Letting the browser crop the sensor to the screen's tall,
+  // narrow shape instead is a heavy digital zoom. camXform frames the result.
   const wanted = TOUCH
-    ? { facingMode: 'user', resizeMode: 'none' }
+    ? { facingMode: 'user', resizeMode: 'none', aspectRatio: { ideal: viewW / viewH }, height: { ideal: 1280 } }
     : { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } };
   try {
     stream = await navigator.mediaDevices.getUserMedia({ video: wanted, audio: false });
@@ -399,20 +402,18 @@ function drawMaskPreview() {
   ctx.putImageData(img, 0, 0);
 }
 
-// Frames the camera picture on the grid: fill the screen (cutting off what
-// does not fit), but never cut off more than MAX_CROP of the picture; past
-// that, show more of it and let water fill the margins. A 16:9 camera on a
-// laptop simply fills the screen; a phone's picture on a tall screen keeps
-// most of its width instead of being zoomed into the middle.
-const MAX_CROP = 0.2;
+// Frames the camera picture on the grid. "Fill" covers the screen, cutting
+// off what does not fit (on a tall phone, the sides of a 3:4 picture); "whole"
+// shows all of it, with water-only margins where the picture does not reach.
 function camXform(srcW, srcH) {
   const r = (srcW / srcH) / (simW / simH); // > 1: picture wider than the screen
+  const fill = ui.framing.value !== 'whole';
   let sx, sy;                               // share of the picture spanned by the screen
   if (r >= 1) {
-    sx = Math.max(1 / r, 1 - MAX_CROP);
+    sx = fill ? 1 / r : 1;
     sy = sx * r;
   } else {
-    sy = Math.max(r, 1 - MAX_CROP);
+    sy = fill ? r : 1;
     sx = sy / r;
   }
   return [sx, sy, (1 - sx) / 2, (1 - sy) / 2];
@@ -562,7 +563,7 @@ function step(now) {
   // rain
   const rain = +ui.rain.value;
   if (rain > 0 && Math.random() < rain * 0.75) {
-    drops.push({ x: Math.random(), y: Math.random(), amp: 0.05 + 0.2 * rain, r: 0.006 * shortSide() });
+    drops.push({ x: Math.random(), y: Math.random(), amp: 0.05 + 0.2 * rain, r: dropRadius(0.006, 2.5) });
   }
 
   runMaskPass(rawTex, xform);
@@ -607,7 +608,7 @@ function note(msg) {
 const ui = {};
 for (const id of ['obstacle', 'ripples', 'look', 'palette', 'speed', 'damp', 'push',
   'relief', 'refract', 'rain', 'mirror', 'invert', 'soft', 'ease', 'showmask',
-  'sound', 'volume', 'melody', 'voices', 'clarity', 'slush', 'water', 'pitch', 'scale', 'detail']) {
+  'sound', 'volume', 'melody', 'voices', 'clarity', 'slush', 'water', 'pitch', 'scale', 'detail', 'framing']) {
   ui[id] = el(id);
 }
 
@@ -688,13 +689,20 @@ function shortSide() {
   return Math.min(1, simW / simH);
 }
 
+// Drop radius, in the splat shader's units (screen heights): a share of the
+// screen's short side, but never under a few grid cells. A drop narrower than
+// that is mostly grid-scale detail and rings as fizz instead of a ripple.
+function dropRadius(share, minCells) {
+  return Math.max(share * shortSide(), minCells / simH);
+}
+
 function dropAt(e, amp) {
   const r = canvas.getBoundingClientRect();
   drops.push({
     x: (e.clientX - r.left) / r.width,
     y: 1 - (e.clientY - r.top) / r.height,
     amp,
-    r: 0.02 * shortSide(),
+    r: dropRadius(0.02, 4),
   });
   pointer.x = e.clientX;
   pointer.y = e.clientY;

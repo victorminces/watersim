@@ -36,6 +36,7 @@ the water to drop a stone in it.
 | Rain | Random droplets, so the pool is never dead still. |
 | Detail | Fineness of the water grid: finer makes smaller waves relative to the screen, at more GPU cost. Changing it stills the water. |
 | Mirror | Flip the camera horizontally — on for a mirror-facing screen, off for projection. |
+| Framing | Fill the screen (crops what does not fit — on a tall phone, the sides of the picture), or show the whole picture with water-only margins. |
 | Invert mask | Swap body and water. Set automatically on the first frames with someone in them (the top corners of the picture are taken to be background), unless you change it by hand. |
 | Edge softness | How much the contour is smoothed each frame (0–1). |
 | Mask easing | Temporal smoothing of the mask: low is calm but laggy, high is responsive but jittery. |
@@ -109,11 +110,12 @@ frame and the audio runs with large buffers, both to avoid crackle.
 WebGL2 with `EXT_color_buffer_float` (any current desktop browser), a webcam,
 and an internet connection the first time, to fetch the segmentation model.
 
-On phones and tablets it uses a lighter grid (384×216 cells, 10 wave steps a
-frame; the Detail slider trades fineness for speed) and starts with the panel
-tucked behind a **Controls** button. The camera's natural picture is used and
-framed to fill the screen without cutting off more than a fifth of it; past
-that, water fills the margins instead of the picture being zoomed in. The
+On phones and tablets the grid is coarser (about 120 cells across the short
+side, against ~265 on a laptop): the waves a moving body makes are a fixed
+number of cells long, so on a small screen a fine grid makes them look like
+fizz. The Detail slider trades this back. The panel starts tucked behind a
+**Controls** button, and the camera is asked for its own mode closest to the
+screen's shape, rather than being cropped to it by the browser. The
 camera needs https, so use the live link. If the camera is refused, sends
 nothing, or gets switched off (screen locked, another app), a notice says so,
 and tapping it restarts the camera. If body detection on a phone's GPU returns
