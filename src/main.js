@@ -15,7 +15,8 @@ import { WaterAudio, SCALES } from './audio.js';
 // Phones and tablets: a lighter grid and pixel ratio, and a button for the
 // panel since there is no H key.
 const TOUCH = window.matchMedia('(pointer: coarse)').matches;
-const CELLS = TOUCH ? 320 * 180 : 512 * 288; // grid budget, laid out to the screen aspect
+// Grid budget, laid out to the screen aspect; the Detail slider scales it.
+const CELLS = TOUCH ? 384 * 216 : 512 * 288;
 // Wave steps per animation frame. This also sets the shortest wave the pool can
 // make: a moving contour can only emit at the distance a wave travels between
 // camera frames, so too few substeps and the body sheds grid-scale fizz instead
@@ -117,7 +118,8 @@ function resize() {
   canvas.height = viewH;
 
   const aspect = viewW / viewH;
-  const w = Math.max(96, Math.round(Math.sqrt(CELLS * aspect)));
+  const cells = CELLS * (ui.detail ? +ui.detail.value : 1);
+  const w = Math.max(96, Math.round(Math.sqrt(cells * aspect)));
   const h = Math.max(96, Math.round(w / aspect));
   if (w !== simW || h !== simH) {
     simW = w;
@@ -173,10 +175,11 @@ async function openCamera() {
     throw new Error('The camera only works over https (or on localhost). Open the https link, or run without a camera.');
   }
   bootMsg.textContent = 'Asking for the camera…';
-  // A phone held upright wants a portrait picture: a fixed landscape request
-  // would be cropped down to its middle quarter to fill the screen.
+  // Phones get the camera's natural picture. Asking for the screen's tall,
+  // narrow shape makes the browser crop the sensor to fit, which is a heavy
+  // digital zoom; camXform below decides how to frame what arrives.
   const wanted = TOUCH
-    ? { facingMode: 'user', aspectRatio: { ideal: viewW / viewH } }
+    ? { facingMode: 'user', resizeMode: 'none' }
     : { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } };
   try {
     stream = await navigator.mediaDevices.getUserMedia({ video: wanted, audio: false });
@@ -367,15 +370,23 @@ function drawMaskPreview() {
   ctx.putImageData(img, 0, 0);
 }
 
-// Centred cover-fit of a source frame onto the simulation grid.
+// Frames the camera picture on the grid: fill the screen (cutting off what
+// does not fit), but never cut off more than MAX_CROP of the picture; past
+// that, show more of it and let water fill the margins. A 16:9 camera on a
+// laptop simply fills the screen; a phone's picture on a tall screen keeps
+// most of its width instead of being zoomed into the middle.
+const MAX_CROP = 0.2;
 function camXform(srcW, srcH) {
-  const srcA = srcW / srcH, simA = simW / simH;
-  if (srcA > simA) {
-    const s = simA / srcA;
-    return [s, 1, (1 - s) / 2, 0];
+  const r = (srcW / srcH) / (simW / simH); // > 1: picture wider than the screen
+  let sx, sy;                               // share of the picture spanned by the screen
+  if (r >= 1) {
+    sx = Math.max(1 / r, 1 - MAX_CROP);
+    sy = sx * r;
+  } else {
+    sy = Math.max(r, 1 - MAX_CROP);
+    sx = sy / r;
   }
-  const s = srcA / simA;
-  return [1, s, 0, (1 - s) / 2];
+  return [sx, sy, (1 - sx) / 2, (1 - sy) / 2];
 }
 
 // ---------------------------------------------------------------- passes
@@ -522,7 +533,7 @@ function step(now) {
   // rain
   const rain = +ui.rain.value;
   if (rain > 0 && Math.random() < rain * 0.75) {
-    drops.push({ x: Math.random(), y: Math.random(), amp: 0.05 + 0.2 * rain, r: 0.006 });
+    drops.push({ x: Math.random(), y: Math.random(), amp: 0.05 + 0.2 * rain, r: 0.006 * shortSide() });
   }
 
   runMaskPass(rawTex, xform);
@@ -567,7 +578,7 @@ function note(msg) {
 const ui = {};
 for (const id of ['obstacle', 'ripples', 'look', 'palette', 'speed', 'damp', 'push',
   'relief', 'refract', 'rain', 'mirror', 'invert', 'soft', 'ease', 'showmask',
-  'sound', 'volume', 'melody', 'voices', 'clarity', 'slush', 'water', 'pitch', 'scale']) {
+  'sound', 'volume', 'melody', 'voices', 'clarity', 'slush', 'water', 'pitch', 'scale', 'detail']) {
   ui[id] = el(id);
 }
 
@@ -619,6 +630,11 @@ ui.invert.addEventListener('change', () => {
 el('btn-start').addEventListener('click', startCamera);
 el('btn-demo').addEventListener('click', startDemo);
 el('btn-calm').addEventListener('click', () => sim.clear());
+// A new grid size means new buffers (and still water): on release, not per tick.
+ui.detail.addEventListener('change', () => {
+  simW = simH = 0;
+  resize();
+});
 panelBtn.addEventListener('click', () => setPanel(panel.hidden));
 
 window.addEventListener('keydown', (e) => {
@@ -636,23 +652,36 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
+// Drop sizes are fractions of the screen's short side, so a tap makes the
+// same size of ripple on a tall phone as on a wide laptop. (The splat shader
+// measures in units of the screen's height.)
+function shortSide() {
+  return Math.min(1, simW / simH);
+}
+
 function dropAt(e, amp) {
   const r = canvas.getBoundingClientRect();
   drops.push({
     x: (e.clientX - r.left) / r.width,
     y: 1 - (e.clientY - r.top) / r.height,
     amp,
-    r: 0.02,
+    r: 0.02 * shortSide(),
   });
+  pointer.x = e.clientX;
+  pointer.y = e.clientY;
 }
 canvas.addEventListener('pointerdown', (e) => {
   pointer.down = true;
   dropAt(e, 0.9);
 });
+// Dragging leaves a trail of drops spaced by distance, not time: a finger
+// always wobbles a little, and a drop every few milliseconds of wobble turned
+// one tap into a cluster of tiny ripples.
 canvas.addEventListener('pointermove', (e) => {
   if (!pointer.down) return;
-  if (performance.now() - pointer.last < 25) return;
-  pointer.last = performance.now();
+  const r = canvas.getBoundingClientRect();
+  const step = 0.04 * Math.min(r.width, r.height);
+  if (Math.hypot(e.clientX - pointer.x, e.clientY - pointer.y) < step) return;
   dropAt(e, 0.35);
 });
 window.addEventListener('pointerup', () => { pointer.down = false; });
@@ -664,7 +693,7 @@ try {
   // Console handle for poking at the simulation: __water.read('mask', x, y, w)
   window.__water = {
     get gl() { return gl; }, get sim() { return sim; }, get mask() { return mask; },
-    get audio() { return audio; }, get stats() { return readback.out; },
+    get audio() { return audio; }, get stats() { return readback.out; }, get drops() { return drops; },
     // Advance one frame by hand at a chosen timestamp (ms), e.g. to measure the
     // pool at a steady 60 fps in a throttled background tab.
     step,

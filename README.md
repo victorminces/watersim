@@ -34,6 +34,7 @@ the water to drop a stone in it.
 | Relief | Vertical exaggeration — contrast of the shading. |
 | Refraction | Bend of the camera image under the waves (second look only). |
 | Rain | Random droplets, so the pool is never dead still. |
+| Detail | Fineness of the water grid: finer makes smaller waves relative to the screen, at more GPU cost. Changing it stills the water. |
 | Mirror | Flip the camera horizontally — on for a mirror-facing screen, off for projection. |
 | Invert mask | Swap body and water, if segmentation comes back the wrong way round. |
 | Edge softness | How much the contour is smoothed each frame (0–1). |
@@ -108,8 +109,11 @@ frame and the audio runs with large buffers, both to avoid crackle.
 WebGL2 with `EXT_color_buffer_float` (any current desktop browser), a webcam,
 and an internet connection the first time, to fetch the segmentation model.
 
-On phones and tablets it uses a lighter grid (320×180 cells, 10 wave steps a
-frame) and starts with the panel tucked behind a **Controls** button. The
+On phones and tablets it uses a lighter grid (384×216 cells, 10 wave steps a
+frame; the Detail slider trades fineness for speed) and starts with the panel
+tucked behind a **Controls** button. The camera's natural picture is used and
+framed to fill the screen without cutting off more than a fifth of it; past
+that, water fills the margins instead of the picture being zoomed in. The
 camera needs https, so use the live link. If the camera is refused, sends
 nothing, or gets switched off (screen locked, another app), a notice says so,
 and tapping it restarts the camera. On iPhone, the ring/silent switch mutes the

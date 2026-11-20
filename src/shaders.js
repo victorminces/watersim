@@ -26,6 +26,13 @@ vec2 camUv(vec2 uv) {
   if (uMirror == 1) uv.x = 1.0 - uv.x;
   uv.y = 1.0 - uv.y;
   return uv * uCamXform.xy + uCamXform.zw;
+}
+
+// 1 inside the camera picture, 0 in the margins around it (where the picture
+// is narrower than the screen), with a soft edge between.
+float inCam(vec2 c) {
+  vec2 e = min(c, 1.0 - c);
+  return smoothstep(0.0, 0.015, min(e.x, e.y));
 }`;
 
 export const MASK_FRAG = `#version 300 es
@@ -42,8 +49,10 @@ uniform int uInvert;
 ${CAM_UV}
 
 float rawAt(vec2 uv) {
-  float m = texture(uRaw, camUv(uv)).r;
-  return uInvert == 1 ? 1.0 - m : m;
+  vec2 c = camUv(uv);
+  float m = texture(uRaw, c).r;
+  if (uInvert == 1) m = 1.0 - m;
+  return m * inCam(c); // nobody stands where the camera cannot see: water
 }
 
 void main() {
@@ -237,8 +246,11 @@ void main() {
 
   vec3 col;
   if (uMode == 1) {
-    vec3 flat_ = texture(uVideo, camUv(vUv)).rgb;
-    vec3 bent = texture(uVideo, camUv(vUv + n.xy * uRefract)).rgb;
+    // Past the edges of the camera picture there is only dark water.
+    vec2 cf = camUv(vUv), cb = camUv(vUv + n.xy * uRefract);
+    vec3 margin = uDeep * 0.7;
+    vec3 flat_ = mix(margin, texture(uVideo, cf).rgb, inCam(cf));
+    vec3 bent = mix(margin, texture(uVideo, cb).rgb, inCam(cb));
     vec3 tint = mix(uDeep, uShallow, 0.5);
     col = mix(bent, bent * tint * 2.4, 0.45);
     col += uSpec * (spec * 0.9 + sheen * 0.4) + uShallow * caustic * 0.18;
