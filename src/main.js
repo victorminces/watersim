@@ -4,13 +4,18 @@
 // measure how it moved, add any point impulses, step the wave equation, shade
 // the height field, and boil the pool down to a grid of zone stats for sound.
 
-import { VERT, MASK_FRAG, SPLAT_FRAG, SIM_FRAG, RENDER_FRAG, REDUCE_FRAG } from './shaders.js';
-import {
+// The modules load as one versioned set: index.html asks for main.js?v=...,
+// and the same query goes on everything main.js pulls in. GitHub Pages lets
+// browsers keep files for ten minutes, and a fresh main.js running against a
+// stale module from the last deploy breaks in confusing ways.
+const V = new URL(import.meta.url).search;
+const { VERT, MASK_FRAG, SPLAT_FRAG, SIM_FRAG, RENDER_FRAG, REDUCE_FRAG } = await import('./shaders.js' + V);
+const {
   createGL, Program, PingPong, makeTexture, makeTarget, fullscreenQuad, bindTarget, Readback,
-} from './glx.js';
-import { Segmenter } from './segmenter.js';
-import { DemoMask } from './demo.js';
-import { WaterAudio, SCALES } from './audio.js';
+} = await import('./glx.js' + V);
+const { Segmenter } = await import('./segmenter.js' + V);
+const { DemoMask } = await import('./demo.js' + V);
+const { WaterAudio, SCALES } = await import('./audio.js' + V);
 
 // Phones and tablets: a lighter grid and pixel ratio, and a button for the
 // panel since there is no H key.
@@ -238,6 +243,19 @@ async function restartCamera() {
   }
 }
 
+let cpuTried = false;
+async function switchToCpu() {
+  if (cpuTried) return;
+  cpuTried = true;
+  try {
+    await segmenter.useCpu();
+    cameraSince = performance.now();
+  } catch (err) {
+    console.error(err);
+    toast('Body detection could not restart on the CPU.');
+  }
+}
+
 function waitFor(test, ms) {
   return new Promise((resolve) => {
     const t0 = performance.now();
@@ -283,6 +301,14 @@ function watchCamera(now) {
     action = restartCamera;
   } else if (segmenter.generation === 0 && now - cameraSince > 8000) {
     msg = 'Body detection has not started. This device may be too slow for it.';
+  } else if (TOUCH && !cpuTried && !segmenter.varied && segmenter.delegate === 'GPU' && segmenter.generation > 150) {
+    // Five-odd seconds of masks with nobody in them, on a phone's GPU: on some
+    // phones that path runs but returns blanks. Try the CPU once. (Not on a
+    // laptop, where an empty room at start is the likelier story.)
+    switchToCpu();
+    msg = 'Switching body detection to the CPU…';
+  } else if (!segmenter.varied && now - cameraSince > 6000) {
+    msg = 'Body detection does not see anyone yet. Step back so your head and shoulders are in view.';
   }
   if (msg) {
     if (toastEl.textContent !== msg || toastEl.hidden) toast(msg, action);
@@ -336,19 +362,22 @@ function uploadDemo(t) {
 
 // The model's person/background label order has changed between releases, so
 // if nearly the whole frame comes back as "body" we flip the mask once.
+// Which label is the person? The model's numbering has differed between
+// releases and devices, and how much of the frame a person fills says little
+// (a phone selfie can be half face). The top corners of a selfie frame,
+// though, are background almost always: whichever label fills them is the
+// background. Decided once, over the first masks that actually contain
+// someone, unless the invert box has been touched by hand.
 function autoCalibrate() {
-  if (calibrated) return;
-  calibSum += segmenter.coverage;
+  if (calibrated || segmenter.uniform) return;
+  calibSum += segmenter.cornerOn;
   calibN++;
-  if (calibN < 45) return;
+  if (calibN < 30) return;
   calibrated = true;
-  // Judge the mask as it is shown, after the current invert setting, so a
-  // default of "inverted" is confirmed rather than toggled back.
-  const raw = calibSum / calibN;
-  const shown = ui.invert.checked ? 1 - raw : raw;
-  if (shown > 0.62) {
-    ui.invert.checked = !ui.invert.checked;
-    note('Mask looked inverted — flipped it for you.');
+  const invert = calibSum / calibN > 0.5; // the non-zero label is in the corners: it is the background
+  if (invert !== ui.invert.checked) {
+    ui.invert.checked = invert;
+    note('Body and water were swapped — fixed that for you.');
   }
 }
 
@@ -694,6 +723,7 @@ try {
   window.__water = {
     get gl() { return gl; }, get sim() { return sim; }, get mask() { return mask; },
     get audio() { return audio; }, get stats() { return readback.out; }, get drops() { return drops; },
+    get segmenter() { return segmenter; },
     // Advance one frame by hand at a chosen timestamp (ms), e.g. to measure the
     // pool at a steady 60 fps in a throttled background tab.
     step,

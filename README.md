@@ -36,7 +36,7 @@ the water to drop a stone in it.
 | Rain | Random droplets, so the pool is never dead still. |
 | Detail | Fineness of the water grid: finer makes smaller waves relative to the screen, at more GPU cost. Changing it stills the water. |
 | Mirror | Flip the camera horizontally — on for a mirror-facing screen, off for projection. |
-| Invert mask | Swap body and water, if segmentation comes back the wrong way round. |
+| Invert mask | Swap body and water. Set automatically on the first frames with someone in them (the top corners of the picture are taken to be background), unless you change it by hand. |
 | Edge softness | How much the contour is smoothed each frame (0–1). |
 | Mask easing | Temporal smoothing of the mask: low is calm but laggy, high is responsive but jittery. |
 | Show mask preview | Thumbnail of what the segmenter sees. |
@@ -116,5 +116,6 @@ framed to fill the screen without cutting off more than a fifth of it; past
 that, water fills the margins instead of the picture being zoomed in. The
 camera needs https, so use the live link. If the camera is refused, sends
 nothing, or gets switched off (screen locked, another app), a notice says so,
-and tapping it restarts the camera. On iPhone, the ring/silent switch mutes the
+and tapping it restarts the camera. If body detection on a phone's GPU returns
+nothing but empty masks for a few seconds, it switches to the CPU by itself. On iPhone, the ring/silent switch mutes the
 sound.

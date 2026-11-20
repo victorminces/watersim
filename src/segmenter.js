@@ -17,25 +17,44 @@ export class Segmenter {
     this.stamp = 0;
     this.lastVideoTime = -1;
     this.delegate = null;
+    // What the masks say about themselves, for working out which label is the
+    // person and whether detection works at all on this device:
+    this.cornerOn = 0;     // share of the top corners carrying the non-zero label
+    this.uniform = true;   // the latest mask is all one label (nobody, or broken)
+    this.varied = false;   // some mask since loading has had two labels in it
   }
 
   async load() {
     const { ImageSegmenter, FilesetResolver } = await import(/* @vite-ignore */ CDN);
-    const vision = await FilesetResolver.forVisionTasks(CDN + '/wasm');
-    const opts = (delegate) => ({
+    this.ImageSegmenter = ImageSegmenter;
+    this.vision = await FilesetResolver.forVisionTasks(CDN + '/wasm');
+    try {
+      await this.#create('GPU');
+    } catch (err) {
+      console.warn('GPU delegate unavailable, falling back to CPU.', err);
+      await this.#create('CPU');
+    }
+  }
+
+  // Start over on the CPU. Some phone graphics drivers load the GPU version
+  // without complaint and then return masks with nobody in them, ever.
+  async useCpu() {
+    this.ready = false;
+    if (this.seg) this.seg.close();
+    this.seg = null;
+    await this.#create('CPU');
+  }
+
+  async #create(delegate) {
+    this.seg = await this.ImageSegmenter.createFromOptions(this.vision, {
       baseOptions: { modelAssetPath: MODEL, delegate },
       runningMode: 'VIDEO',
       outputCategoryMask: true,
       outputConfidenceMasks: false,
     });
-    try {
-      this.seg = await ImageSegmenter.createFromOptions(vision, opts('GPU'));
-      this.delegate = 'GPU';
-    } catch (err) {
-      console.warn('GPU delegate unavailable, falling back to CPU.', err);
-      this.seg = await ImageSegmenter.createFromOptions(vision, opts('CPU'));
-      this.delegate = 'CPU';
-    }
+    this.delegate = delegate;
+    this.varied = false;
+    this.busy = false;
     this.ready = true;
   }
 
@@ -67,17 +86,34 @@ export class Segmenter {
     if (!mask) return;
     const src = mask.getAsUint8Array();
     if (!this.buf || this.buf.length !== src.length) this.buf = new Uint8Array(src.length);
-    // The model's category index for "person" has varied between releases, so
-    // treat any non-zero label as body and let the UI invert if it looks wrong.
+    // Which label is the person has differed between model releases and
+    // devices: keep the non-zero label as "body" here, and let the app invert
+    // it (it decides automatically from cornerOn, below).
     let hit = 0;
     for (let i = 0; i < src.length; i++) {
       const on = src[i] !== 0;
       this.buf[i] = on ? 255 : 0;
       if (on) hit++;
     }
-    this.width = mask.width;
-    this.height = mask.height;
+    const w = mask.width, h = mask.height;
+    this.width = w;
+    this.height = h;
     this.coverage = hit / src.length;
+    this.uniform = hit === 0 || hit === src.length;
+    if (!this.uniform) this.varied = true;
+
+    // Top corners (row 0 is the top of the picture): in a selfie frame they
+    // are background almost always, which tells the labels apart.
+    const rows = Math.max(1, Math.round(h * 0.12)), cols = Math.max(1, Math.round(w * 0.2));
+    let on = 0;
+    for (let y = 0; y < rows; y++) {
+      const row = y * w;
+      for (let x = 0; x < cols; x++) {
+        if (src[row + x]) on++;
+        if (src[row + w - 1 - x]) on++;
+      }
+    }
+    this.cornerOn = on / (rows * cols * 2);
     this.generation++;
   }
 
