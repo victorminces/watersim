@@ -264,3 +264,35 @@ void main() {
 
   outColor = vec4(col, 1.0);
 }`;
+
+// Boils the pool down to one texel per sound zone (the target is cols x rows).
+// Sixteen-by-sixteen samples per zone is plenty for a mean of squares, and keeps
+// the loop bounds constant.
+//   r = mean squared velocity, scaled  -> how hard the water moves here
+//   g = mean squared height            -> with r, gives the ripple frequency
+//   b = mean body coverage             -> the body silences what it covers
+//   a = mean contour movement          -> splashes
+export const REDUCE_FRAG = `#version 300 es
+precision highp float;
+out vec4 outColor;
+
+uniform sampler2D uSim;
+uniform sampler2D uMask;
+uniform vec2 uZones;
+uniform float uVelScale; // lifts tiny per-substep velocities clear of half-float underflow
+
+void main() {
+  vec2 size = 1.0 / uZones;
+  vec2 base = floor(gl_FragCoord.xy) * size;
+  vec4 acc = vec4(0.0);
+  for (int y = 0; y < 16; y++) {
+    for (int x = 0; x < 16; x++) {
+      vec2 uv = base + (vec2(float(x), float(y)) + 0.5) / 16.0 * size;
+      vec2 s = texture(uSim, uv).rg;
+      vec2 m = texture(uMask, uv).rg;
+      float v = (s.x - s.y) * uVelScale;
+      acc += vec4(v * v, s.x * s.x, m.r, abs(m.g));
+    }
+  }
+  outColor = acc / 256.0;
+}`;

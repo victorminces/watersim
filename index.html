@@ -21,7 +21,7 @@
 <div id="panel" hidden>
   <div class="row head">
     <strong>Controls</strong>
-    <span class="hint">H hides &middot; F fullscreen</span>
+    <span class="hint">H hides &middot; F fullscreen &middot; M mutes</span>
   </div>
 
   <div class="group">
@@ -33,7 +33,7 @@
     <label class="sel">Look
       <select id="look">
         <option value="0">Water only &mdash; person as void</option>
-        <option value="1">Camera seen through the water</option>
+        <option value="1" selected>Camera seen through the water</option>
       </select>
     </label>
     <label class="sel">Palette
@@ -42,19 +42,38 @@
   </div>
 
   <div class="group">
-    <label class="sl">Wave speed <input type="range" id="speed" min="0.08" max="0.45" step="0.01" value="0.34"></label>
-    <label class="sl">Wave life <input type="range" id="damp" min="0.9" max="0.999" step="0.001" value="0.975"></label>
-    <label class="sl">Ripple push <input type="range" id="push" min="0" max="6" step="0.1" value="1.2"></label>
+    <label class="sl">Wave speed <input type="range" id="speed" min="0.08" max="0.45" step="0.01" value="0.11"></label>
+    <label class="sl">Wave life <input type="range" id="damp" min="0.9" max="0.999" step="0.001" value="0.92"></label>
+    <label class="sl">Ripple push <input type="range" id="push" min="0" max="6" step="0.1" value="0.6"></label>
     <label class="sl">Relief <input type="range" id="relief" min="0.2" max="4" step="0.05" value="1"></label>
-    <label class="sl">Refraction <input type="range" id="refract" min="0" max="0.2" step="0.005" value="0.06"></label>
+    <label class="sl">Refraction <input type="range" id="refract" min="0" max="0.2" step="0.005" value="0"></label>
     <label class="sl">Rain <input type="range" id="rain" min="0" max="1" step="0.02" value="0"></label>
   </div>
 
   <div class="group">
     <label><input type="checkbox" id="mirror" checked> Mirror the camera</label>
-    <label><input type="checkbox" id="invert"> Invert mask <span class="sub">if water and body are swapped</span></label>
-    <label class="sl">Edge softness <input type="range" id="soft" min="0" max="1" step="0.05" value="0.5"></label>
-    <label class="sl">Mask easing <input type="range" id="ease" min="0.05" max="1" step="0.05" value="0.3"></label>
+    <label><input type="checkbox" id="invert" checked> Invert mask <span class="sub">if water and body are swapped</span></label>
+    <label class="sl">Edge softness <input type="range" id="soft" min="0" max="1" step="0.05" value="0.1"></label>
+    <label class="sl">Mask easing <input type="range" id="ease" min="0.05" max="1" step="0.05" value="0.1"></label>
+  </div>
+
+  <div class="group">
+    <label><input type="checkbox" id="sound" checked> Sound <span class="sub">the water, made to sing</span></label>
+    <label class="sl">Volume <input type="range" id="volume" min="0" max="1" step="0.01" value="0.7"></label>
+    <label class="sl">Water <input type="range" id="water" min="0" max="1" step="0.01" value="0.45"></label>
+    <label class="sl">Slush <input type="range" id="slush" min="0" max="1" step="0.01" value="0.22"></label>
+    <label class="sl">Resonators <input type="range" id="melody" min="0" max="1" step="0.01" value="0.16"></label>
+    <label class="sl">Voices <input type="range" id="voices" min="1" max="4" step="1" value="3"></label>
+    <label class="sl">Clarity <input type="range" id="clarity" min="8" max="150" step="1" value="150"></label>
+    <label class="sel">Pitch
+      <select id="pitch">
+        <option value="snap">Snap to scale</option>
+        <option value="glide">Glide with the ripples</option>
+      </select>
+    </label>
+    <label class="sel">Scale
+      <select id="scale"></select>
+    </label>
   </div>
 
   <div class="group">

@@ -162,6 +162,8 @@ select {
   border-radius: 7px;
 }
 
+select:disabled { opacity: 0.4; }
+
 #maskview {
   width: 100%;
   height: auto;

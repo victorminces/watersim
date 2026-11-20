@@ -158,3 +158,49 @@ export function bindTarget(gl, target, w, h) {
   gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.fbo : null);
   gl.viewport(0, 0, target ? target.w : w, target ? target.h : h);
 }
+
+// Reads a small float render target back without stalling the frame: the copy
+// goes into a pixel buffer, a fence marks it, and the data is collected on a
+// later frame once the GPU has actually got there.
+export class Readback {
+  constructor(gl, w, h) {
+    this.gl = gl;
+    this.w = w;
+    this.h = h;
+    this.out = new Float32Array(w * h * 4);
+    this.buf = gl.createBuffer();
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.buf);
+    gl.bufferData(gl.PIXEL_PACK_BUFFER, this.out.byteLength, gl.STREAM_READ);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    this.sync = null;
+  }
+
+  get pending() { return this.sync !== null; }
+
+  request(target) {
+    const gl = this.gl;
+    if (this.sync) return;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target.fbo);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.buf);
+    gl.readPixels(0, 0, this.w, this.h, gl.RGBA, gl.FLOAT, 0);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+    gl.flush();
+  }
+
+  // True when fresh data has landed in this.out.
+  poll() {
+    const gl = this.gl;
+    if (!this.sync) return false;
+    const status = gl.clientWaitSync(this.sync, 0, 0);
+    if (status === gl.TIMEOUT_EXPIRED) return false;
+    gl.deleteSync(this.sync);
+    this.sync = null;
+    if (status === gl.WAIT_FAILED) return false;
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.buf);
+    gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, this.out);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    return true;
+  }
+}
