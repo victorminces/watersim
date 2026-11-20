@@ -107,3 +107,10 @@ frame and the audio runs with large buffers, both to avoid crackle.
 
 WebGL2 with `EXT_color_buffer_float` (any current desktop browser), a webcam,
 and an internet connection the first time, to fetch the segmentation model.
+
+On phones and tablets it uses a lighter grid (320×180 cells, 10 wave steps a
+frame) and starts with the panel tucked behind a **Controls** button. The
+camera needs https, so use the live link. If the camera is refused, sends
+nothing, or gets switched off (screen locked, another app), a notice says so,
+and tapping it restarts the camera. On iPhone, the ring/silent switch mutes the
+sound.

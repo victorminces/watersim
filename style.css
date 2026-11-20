@@ -180,3 +180,60 @@ select:disabled { opacity: 0.4; }
   font-variant-numeric: tabular-nums;
   color: rgba(232, 238, 244, 0.45);
 }
+
+/* ---------- phones ---------- */
+
+/* Camera frames come from here; it has to be in the page for iOS to keep
+   delivering them, but nobody needs to see it. */
+video.feed {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 2px;
+  height: 2px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+#btn-panel {
+  position: fixed;
+  right: 12px;
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  z-index: 11;
+  background: var(--panel);
+  backdrop-filter: blur(14px);
+}
+
+#btn-panel[hidden] { display: none; }
+
+@media (max-width: 520px) {
+  #panel {
+    left: 8px;
+    right: 8px;
+    top: 8px;
+    width: auto;
+    max-height: calc(100dvh - 72px);
+    font-size: 0.9rem;
+  }
+}
+
+#toast {
+  position: fixed;
+  left: 50%;
+  top: calc(12px + env(safe-area-inset-top, 0px));
+  transform: translateX(-50%);
+  z-index: 12;
+  width: max-content;
+  max-width: min(420px, calc(100vw - 24px));
+  padding: 0.6rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  backdrop-filter: blur(14px);
+  font-size: 0.85rem;
+  line-height: 1.4;
+  text-align: center;
+}
+
+#toast[hidden] { display: none; }
+#toast.actionable { cursor: pointer; border-color: var(--accent); }

@@ -12,12 +12,17 @@ import { Segmenter } from './segmenter.js';
 import { DemoMask } from './demo.js';
 import { WaterAudio, SCALES } from './audio.js';
 
-const CELLS = 512 * 288;          // simulation grid budget, laid out to the screen aspect
+// Phones and tablets: a lighter grid and pixel ratio, and a button for the
+// panel since there is no H key.
+const TOUCH = window.matchMedia('(pointer: coarse)').matches;
+const CELLS = TOUCH ? 320 * 180 : 512 * 288; // grid budget, laid out to the screen aspect
 // Wave steps per animation frame. This also sets the shortest wave the pool can
 // make: a moving contour can only emit at the distance a wave travels between
 // camera frames, so too few substeps and the body sheds grid-scale fizz instead
 // of ripples.
-const SUBSTEPS = 16;
+// Phones get fewer: their GPUs cannot afford 16 passes, and the coarser grid
+// already makes each step cover more of the screen.
+const SUBSTEPS = TOUCH ? 10 : 16;
 const MAX_DROPS = 16;             // must match uDrops[] in the splat shader
 const ZONES_X = 16, ZONES_Y = 8;  // sound grid laid over the pool
 const VEL_SCALE = 32;             // see uVelScale in the reduce shader
@@ -51,6 +56,12 @@ const boot = el('boot');
 const bootMsg = el('boot-msg');
 const panel = el('panel');
 const maskview = el('maskview');
+const panelBtn = el('btn-panel');
+
+function setPanel(show) {
+  panel.hidden = !show;
+  panelBtn.textContent = show ? 'Hide' : 'Controls';
+}
 
 let gl, quad, progMask, progSplat, progSim, progRender, progReduce;
 let statsTarget, readback;
@@ -99,7 +110,7 @@ function initGL() {
 }
 
 function resize() {
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const dpr = Math.min(window.devicePixelRatio || 1, TOUCH ? 1.5 : 2);
   viewW = Math.max(2, Math.round(window.innerWidth * dpr));
   viewH = Math.max(2, Math.round(window.innerHeight * dpr));
   canvas.width = viewW;
@@ -121,39 +132,166 @@ function resize() {
 
 // ---------------------------------------------------------------- sources
 
-async function startCamera() {
-  startAudio(); // first, while still inside the click that allows sound
-  bootMsg.textContent = 'Asking for the camera…';
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
-      audio: false,
-    });
-  } catch (err) {
-    bootMsg.textContent = 'No camera available (' + err.name + '). You can still run without one.';
-    return;
-  }
-  video = document.createElement('video');
-  video.playsInline = true;
-  video.muted = true;
-  video.srcObject = stream;
-  await video.play();
+let starting = false;
 
-  bootMsg.textContent = 'Loading the body-segmentation model…';
-  segmenter = new Segmenter();
+async function startCamera() {
+  if (starting || source) return;
+  starting = true;
+  el('btn-start').disabled = true;
+  startAudio(); // first, while still inside the tap that allows sound
   try {
-    await segmenter.load();
+    await openCamera();
+    if (!segmenter) {
+      bootMsg.textContent = 'Loading body detection…';
+      segmenter = new Segmenter();
+      try {
+        await segmenter.load();
+      } catch (err) {
+        console.error(err);
+        segmenter = null;
+        stopCamera();
+        bootMsg.textContent = 'Could not load body detection (offline?). Running without a camera instead.';
+        startDemo();
+        return;
+      }
+    }
+    source = 'camera';
+    begin();
   } catch (err) {
     console.error(err);
-    bootMsg.textContent = 'Could not load the segmentation model (offline?). Running without a camera instead.';
-    startDemo();
-    return;
+    bootMsg.textContent = err.message;
+  } finally {
+    starting = false;
+    el('btn-start').disabled = false;
   }
-  source = 'camera';
-  begin();
+}
+
+// Opens the camera and resolves only once it is really delivering pictures.
+// Throws an Error whose message is meant for the person holding the phone.
+async function openCamera() {
+  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+    throw new Error('The camera only works over https (or on localhost). Open the https link, or run without a camera.');
+  }
+  bootMsg.textContent = 'Asking for the camera…';
+  // A phone held upright wants a portrait picture: a fixed landscape request
+  // would be cropped down to its middle quarter to fill the screen.
+  const wanted = TOUCH
+    ? { facingMode: 'user', aspectRatio: { ideal: viewW / viewH } }
+    : { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } };
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: wanted, audio: false });
+  } catch (err) {
+    const why = {
+      NotAllowedError: 'Camera permission was refused. Allow it in the browser’s site settings, then tap Start camera again.',
+      NotFoundError: 'No camera was found.',
+      NotReadableError: 'The camera is busy in another app. Close it and tap Start camera again.',
+      OverconstrainedError: 'The camera could not provide a usable picture.',
+    }[err.name];
+    throw new Error((why || 'Could not open the camera (' + err.name + ').') + ' You can also run without one.');
+  }
+  // Android Chrome and iOS Safari can leave a camera video that is not in the
+  // page at zero frames; the attributes keep iOS from going fullscreen.
+  // Invisible, but not display:none, which pauses it.
+  if (!video) {
+    video = document.createElement('video');
+    video.setAttribute('playsinline', '');
+    video.setAttribute('muted', '');
+    video.playsInline = true;
+    video.muted = true;
+    video.className = 'feed';
+    document.body.appendChild(video);
+  }
+  video.srcObject = stream;
+  try {
+    await video.play();
+  } catch (err) {
+    console.warn('video.play() was refused; waiting for frames anyway.', err);
+  }
+  const live = await waitFor(() => video.readyState >= 2 && video.videoWidth > 0, 8000);
+  if (!live) {
+    stopCamera();
+    throw new Error('The camera opened but sent no picture. Tap Start camera to try again.');
+  }
+}
+
+function stopCamera() {
+  if (stream) for (const t of stream.getTracks()) t.stop();
+  stream = null;
+}
+
+let restarting = false;
+async function restartCamera() {
+  if (restarting) return;
+  restarting = true;
+  toast('Restarting the camera…');
+  stopCamera();
+  try {
+    await openCamera();
+    toast(null);
+  } catch (err) {
+    toast(err.message, restartCamera);
+  } finally {
+    restarting = false;
+  }
+}
+
+function waitFor(test, ms) {
+  return new Promise((resolve) => {
+    const t0 = performance.now();
+    const poll = () => {
+      if (test()) resolve(true);
+      else if (performance.now() - t0 > ms) resolve(false);
+      else setTimeout(poll, 50);
+    };
+    poll();
+  });
+}
+
+// ---------------------------------------------------------------- toast
+
+// A notice over the water, for problems worth knowing about while the panel is
+// tucked away (it always is, at first, on a phone). Tapping it runs `action`.
+const toastEl = el('toast');
+let toastAction = null;
+function toast(msg, action = null) {
+  toastEl.hidden = !msg;
+  if (msg) toastEl.textContent = msg;
+  toastAction = action;
+  toastEl.classList.toggle('actionable', !!action);
+}
+toastEl.addEventListener('click', () => {
+  if (toastAction) toastAction();
+});
+
+// Camera health, checked every frame, so trouble shows as a notice instead of
+// black water. A live stream's clock runs on without new frames, so watch the
+// track itself: "ended" when the camera is gone, "muted" when it cannot
+// deliver (screen locked, another app took it).
+let cameraSince = 0, cameraWarned = false;
+function watchCamera(now) {
+  if (!stream) return; // restarting: the restart reports for itself
+  const track = stream.getVideoTracks()[0];
+  let msg = null, action = null;
+  if (!track || track.readyState === 'ended') {
+    msg = 'The camera was switched off. Tap here to turn it back on.';
+    action = restartCamera;
+  } else if (track.muted || !video.videoWidth) {
+    msg = 'The camera stopped sending pictures. Tap here to restart it.';
+    action = restartCamera;
+  } else if (segmenter.generation === 0 && now - cameraSince > 8000) {
+    msg = 'Body detection has not started. This device may be too slow for it.';
+  }
+  if (msg) {
+    if (toastEl.textContent !== msg || toastEl.hidden) toast(msg, action);
+    cameraWarned = true;
+  } else if (cameraWarned) {
+    toast(null);
+    cameraWarned = false;
+  }
 }
 
 function startDemo() {
+  if (source) return;
   startAudio();
   source = 'demo';
   demo = new DemoMask();
@@ -163,7 +301,10 @@ function startDemo() {
 
 function begin() {
   boot.hidden = true;
-  panel.hidden = false;
+  cameraSince = performance.now();
+  // On a phone the panel would cover half the water; it starts tucked away.
+  setPanel(!TOUCH);
+  panelBtn.hidden = !TOUCH;
   sim.clear();
   mask.clear();
 }
@@ -361,6 +502,7 @@ function step(now) {
   }
 
   if (source === 'camera') {
+    watchCamera(now);
     segmenter.process(video);
     if (video.videoWidth) {
       uploadCamera();
@@ -472,14 +614,17 @@ ui.invert.addEventListener('change', () => {
   if (source === 'camera' && ui.showmask.checked) drawMaskPreview();
 });
 
-el('btn-start').addEventListener('click', startCamera, { once: true });
-el('btn-demo').addEventListener('click', startDemo, { once: true });
+// Not once-only: after a refused permission or a camera that sent nothing,
+// a second tap tries again.
+el('btn-start').addEventListener('click', startCamera);
+el('btn-demo').addEventListener('click', startDemo);
 el('btn-calm').addEventListener('click', () => sim.clear());
+panelBtn.addEventListener('click', () => setPanel(panel.hidden));
 
 window.addEventListener('keydown', (e) => {
   if (e.target.matches('input, select, button')) return;
   const k = e.key.toLowerCase();
-  if (k === 'h') panel.hidden = !panel.hidden;
+  if (k === 'h') setPanel(panel.hidden);
   else if (k === 'm') {
     ui.sound.checked = !ui.sound.checked;
     ui.sound.dispatchEvent(new Event('change'));
