@@ -3,7 +3,10 @@
 Top-down surface waves, in the browser. The webcam finds a person's silhouette;
 there is no water where the body is, and the water reacts to its contour.
 
-## Run
+**Live: <https://victorminces.github.io/watersim/>** — open it, click *Start camera*
+and allow the webcam (or *Run without camera* for a stand-in figure).
+
+## Run locally
 
 Needs a local server (ES modules and camera access do not work from `file://`):
 
