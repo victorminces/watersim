@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Water Contour</title>
-<link rel="stylesheet" href="style.css?v=20261123152202">
+<link rel="stylesheet" href="style.css?v=20261123154318">
 </head>
 <body>
 <canvas id="stage"></canvas>
@@ -63,6 +63,7 @@
     <label class="sl" data-looks="8">Grating <input type="range" id="grating" min="5" max="120" step="1" value="25"></label>
     <label class="sl" data-looks="8 9">Light from <input type="range" id="lightaz" min="0" max="360" step="1" value="40"></label>
     <label class="sl" data-looks="9">Sun height <input type="range" id="sunh" min="0" max="1" step="0.01" value="0.12"></label>
+    <label class="sl" data-looks="9">Clouds <input type="range" id="clouds" min="0" max="1" step="0.01" value="0.6"></label>
     <label class="sl" data-looks="10">Depth <input type="range" id="depth" min="0.1" max="3" step="0.05" value="0.6"></label>
     <label class="sl" data-looks="10">Caustics <input type="range" id="causticamt" min="0" max="3" step="0.05" value="1"></label>
     <label class="sel" data-looks="0 1 7">Palette
@@ -124,6 +125,6 @@
 <button id="btn-panel" class="ghost small" hidden>Controls</button>
 <div id="toast" role="status" hidden></div>
 
-<script type="module" src="src/main.js?v=20261123152202"></script>
+<script type="module" src="src/main.js?v=20261123154318"></script>
 </body>
 </html>

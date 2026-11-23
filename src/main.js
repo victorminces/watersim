@@ -537,6 +537,7 @@ function runRenderPass(videoTex, xform, now) {
     .f('uLightAz', +ui.lightaz.value * Math.PI / 180)
     .i('uSky', SKIES[ui.sky.value] ?? 0)
     .f('uSunH', +ui.sunh.value)
+    .f('uClouds', +ui.clouds.value)
     .f('uFx', +ui.fx.value)
     .f('uDepth', +ui.depth.value)
     .f('uCaustics', +ui.causticamt.value)
@@ -676,7 +677,7 @@ const ui = {};
 for (const id of ['obstacle', 'ripples', 'look', 'palette', 'speed', 'damp', 'push',
   'relief', 'refract', 'rain', 'mirror', 'invert', 'soft', 'ease', 'showmask',
   'sound', 'volume', 'melody', 'voices', 'clarity', 'slush', 'water', 'pitch', 'scale', 'detail', 'framing',
-  'deform', 'cycle', 'grating', 'fx', 'lightaz', 'sky', 'sunh', 'depth', 'causticamt']) {
+  'deform', 'cycle', 'grating', 'fx', 'lightaz', 'sky', 'sunh', 'clouds', 'depth', 'causticamt']) {
   ui[id] = el(id);
 }
 

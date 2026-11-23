@@ -258,10 +258,42 @@ vec3 spectral(float nm) {
   return (bump3y(c1 * (x - x1), y1) + bump3y(c2 * (x - x2), y2)) * seen;
 }
 
+// Value noise and its fractal sum (0..1, mean ~0.5), for clouds.
+float hash12(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+float vnoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash12(i), hash12(i + vec2(1.0, 0.0)), u.x),
+             mix(hash12(i + vec2(0.0, 1.0)), hash12(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+float fbm(vec2 p) {
+  float s = 0.0, a = 0.5;
+  for (int i = 0; i < 5; i++) {
+    s += a * vnoise(p);
+    p = mat2(1.6, 1.2, -1.2, 1.6) * p + 17.0;
+    a *= 0.5;
+  }
+  return s / 0.97;
+}
+
+// Clouds lit from below by a setting sun: gold nearest it, then orange, rose,
+// magenta, and slate violet in the shadow side of the sky.
+vec3 sunsetCloud(float k) {
+  vec3 c = mix(vec3(1.0, 0.82, 0.38), vec3(1.0, 0.48, 0.14), smoothstep(0.0, 0.25, k));
+  c = mix(c, vec3(0.98, 0.27, 0.40), smoothstep(0.2, 0.5, k));
+  c = mix(c, vec3(0.72, 0.24, 0.68), smoothstep(0.45, 0.75, k));
+  return mix(c, vec3(0.32, 0.24, 0.55), smoothstep(0.7, 1.0, k));
+}
+
 // A sky dome, seen along direction r (z up). sunDir is where the sun is,
-// sunH (0..1) how high, which also turns a sunset into day.
+// sunH (0..1) how high, which also turns a sunset into day. cloudy (0..1):
+// how much of the sunset and midday skies is cloud.
 // Skies: 0 sunset, 1 aurora, 2 neon dusk, 3 midday.
-vec3 skyColor(vec3 r, vec3 sunDir, float sunH, int sky, float time) {
+vec3 skyColor(vec3 r, vec3 sunDir, float sunH, int sky, float time, float cloudy) {
   float t = clamp(r.z, 0.0, 1.0);                 // 0 at the horizon, 1 overhead
   float az = atan(r.y, r.x);
   float toSun = max(dot(r, sunDir), 0.0);
@@ -280,12 +312,31 @@ vec3 skyColor(vec3 r, vec3 sunDir, float sunH, int sky, float time) {
     c += mix(vec3(1.0, 0.85, 0.2), vec3(1.0, 0.3, 0.6), 1.0 - toSun) * pow(toSun, 30.0) * 1.5;
   } else {
     float day = sky == 3 ? 1.0 : sunH;
-    vec3 horizon = mix(vec3(1.0, 0.45, 0.15), vec3(0.75, 0.86, 1.0), day);
-    vec3 middle  = mix(vec3(0.85, 0.30, 0.45), vec3(0.45, 0.66, 0.96), day);
-    vec3 zenith  = mix(vec3(0.10, 0.08, 0.30), vec3(0.14, 0.36, 0.85), day);
+    // Clear sky: warm towards the sun, pink and violet away from it (the
+    // belt of Venus over the Earth's shadow), deep blue overhead.
+    float sunward = 0.5 + 0.5 * dot(normalize(r.xy + vec2(1e-5)), normalize(sunDir.xy + vec2(1e-5)));
+    vec3 horizon = mix(mix(vec3(0.62, 0.36, 0.62), vec3(1.0, 0.50, 0.15), sunward), vec3(0.75, 0.86, 1.0), day);
+    vec3 middle  = mix(mix(vec3(0.38, 0.30, 0.70), vec3(0.95, 0.38, 0.42), sunward), vec3(0.45, 0.66, 0.96), day);
+    vec3 zenith  = mix(vec3(0.08, 0.12, 0.36), vec3(0.14, 0.36, 0.85), day);
     c = mix(horizon, middle, smoothstep(0.0, 0.35, t));
     c = mix(c, zenith, smoothstep(0.3, 1.0, t));
     c += mix(vec3(1.0, 0.5, 0.2), vec3(1.0, 0.95, 0.85), day) * pow(toSun, 8.0) * 0.8; // glow
+    if (cloudy > 0.0) {
+      // A layer of cloud overhead, seen in perspective and drifting. Each
+      // cloud takes its colour from how far it lies from the sun, nudged by
+      // a broader pattern so neighbouring clouds differ; thin edges glow,
+      // thick cores are darker.
+      vec2 p = r.xy / (max(r.z, 0.0) + 0.25) * 1.7 + vec2(time * 0.015, time * 0.006);
+      float d = fbm(p);
+      float th = mix(0.95, 0.22, cloudy);
+      float amount = smoothstep(th, th + 0.16, d) * smoothstep(0.0, 0.1, r.z);
+      float thick = smoothstep(th, th + 0.45, d);
+      float vary = fbm(p * 0.35 + 31.0) - 0.5;
+      float k = clamp(acos(clamp(dot(r, sunDir), -1.0, 1.0)) / 3.14159 * 1.1 + vary * 1.1 + thick * 0.25, 0.0, 1.0);
+      vec3 dusk = sunsetCloud(k) * (1.25 - 0.6 * thick) + vec3(1.0, 0.7, 0.35) * pow(toSun, 6.0) * 0.6;
+      vec3 noon = mix(vec3(1.0), vec3(0.70, 0.74, 0.82), thick);
+      c = mix(c, mix(dusk, noon, smoothstep(0.15, 0.6, day)), amount);
+    }
   }
   c += vec3(1.0, 0.95, 0.85) * smoothstep(0.9990, 0.9997, toSun) * 6.0;               // sun
   return c;
@@ -323,6 +374,7 @@ uniform float uGrating;     // nm of light per cell of ripple spacing (look 8)
 uniform float uLightAz;     // direction the light comes from, radians (looks 8, 9)
 uniform int uSky;           // which sky (look 9)
 uniform float uSunH;        // sun height, 0..1 (look 9)
+uniform float uClouds;      // how much of the sky is cloud, 0..1 (look 9: sunset and midday)
 uniform float uFx;          // how strongly a colour effect is laid over the rippled camera (looks 3-10)
 uniform float uDepth;       // depth of the water (look 10)
 uniform float uCaustics;    // strength of the caustics (look 10)
@@ -475,15 +527,19 @@ void main() {
       // Like real water it mirrors little looking straight down, and more the
       // more a facet tilts towards the horizon, so the picture shows through
       // the flat water and the waves carry the sky's colour.
-      vec3 r = reflect(vec3(0.0, 0.0, -1.0), n);
+      // Seen from a point above the middle of the pool, so even flat water
+      // mirrors a different patch of sky in each part of the screen.
+      vec2 at = (vUv - 0.5) * vec2(uTexel.y / uTexel.x, 1.0);
+      vec3 r = reflect(normalize(vec3(at, -1.3)), n);
+      r.z = abs(r.z); // a facet steep enough to mirror below the horizon sees the sky in a neighbour
       float sunEl = mix(0.03, 1.25, uSunH);
       float sunAz = uLightAz + hue * 0.3;
       vec3 sunDir = vec3(cos(sunEl) * cos(sunAz), cos(sunEl) * sin(sunAz), sin(sunEl));
-      vec3 sky = skyColor(r, sunDir, uSunH, uSky, uTime);
-      vec3 ambient = 0.5 * (skyColor(vec3(0.0, 0.0, 1.0), sunDir, uSunH, uSky, uTime)
-                          + skyColor(normalize(vec3(cos(sunAz), sin(sunAz), 0.15)), sunDir, uSunH, uSky, uTime));
+      vec3 sky = skyColor(r, sunDir, uSunH, uSky, uTime, uClouds);
+      vec3 ambient = 0.5 * (skyColor(vec3(0.0, 0.0, 1.0), sunDir, uSunH, uSky, uTime, 0.0)
+                          + skyColor(normalize(vec3(cos(sunAz), sin(sunAz), 0.15)), sunDir, uSunH, uSky, uTime, 0.0));
       vec3 tint = ambient / max(max(ambient.r, max(ambient.g, ambient.b)), 0.05); // the sky's light, at full brightness
-      float mirror = clamp(fx * (0.06 + 1.1 * sqrt(1.0 - n.z)), 0.0, 1.0);
+      float mirror = clamp(fx * (0.06 + 1.6 * sqrt(1.0 - n.z)), 0.0, 1.0);
       col = mix(cam * mix(vec3(1.0), tint, 0.35 * fx1), sky, mirror);
       col = mix(col, still * mix(vec3(1.0), tint, 0.25 * fx1), body);
     } else {

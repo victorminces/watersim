@@ -34,6 +34,7 @@ the water to drop a stone in it.
 | Light from | Diffraction and sky reflection: the direction the light (or sun) comes from. Color cycle circles it slowly. |
 | Sky | Sky reflection: sunset, aurora, neon dusk or midday. |
 | Sun height | Sky reflection: from a sun on the horizon (sunset colours) to high (daylight). |
+| Clouds | Sky reflection: how much of the sunset or midday sky is cloud, from clear to overcast. |
 | Depth | Clear water: how deep the water is (deeper is bluer). |
 | Caustics | Clear water: strength of the focused sunlight. |
 | Palette | Colour scheme, switchable live. |
@@ -80,9 +81,13 @@ the colour comes with the waves.
 - **Sky reflection.** Real water gets much of its colour from the sky it
   mirrors. Each facet reflects the direction its normal sends the view; flat
   water sees overhead, tilted facets the horizon, so crests catch a sunset's
-  orange. As in real water, looking straight down it mirrors little (the
-  picture shows through, lit by the sky's colour) and more the more a facet
-  tilts.
+  orange. The pool is seen from a point above its middle, so each part of the
+  screen mirrors its own patch of sky. The sunset sky is cloudy: drifting
+  clouds lit from below, gold nearest the sun, then orange, rose, magenta and
+  violet on the far side, each cloud a little different, with deep blue
+  between them, so every ripple catches its own colours. As in real water,
+  looking straight down it mirrors little (the picture shows through, lit by
+  the sky's colour) and more the more a facet tilts.
 - **Clear water.** Water absorbs red first, then green; troughs are deeper than
   crests, so they are bluer. It bends blue slightly more than red, and focuses
   sunlight into caustics, each colour a little apart. Light scattered in the
