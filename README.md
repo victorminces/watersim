@@ -26,15 +26,14 @@ the water to drop a stone in it.
 | --- | --- |
 | Solid obstacle | The silhouette is a wall: waves reflect off the contour and cannot cross it. |
 | Motion ripples | A moving contour shoves the water, so the body radiates waves as it moves. |
-| Look | Water only (body is an empty void) · Camera seen through the water · Rippled camera (the water bends the picture, each colour differently) · Oil slick (an iridescent film on the waves) · Neon contours (lines of equal height, each its own colour) · Liquid trails (the picture smeared along by the waves and drifting through colour) · Thermal camera (brightness as false-colour heat) · Caustic light (rainbow-fringed threads of focused light, over the picture too) · Diffraction (the ripples as a rainbow grating) · Sky reflection (each wave facet mirrors its own patch of sky) · Clear water (looking down through real water at the picture as the floor). Each look shows only the sliders that apply to it. |
-| Deform | How hard the water bends the picture in the rippled, oil, neon, trails, thermal and caustic looks. |
+| Look | Water only (body is an empty void) · Camera seen through the water · Rippled camera (the water bends the picture, each colour differently) · Oil slick (an iridescent film on the waves) · Neon contours (lines of equal height, each its own colour) · Liquid trails (the picture smeared along by the waves and drifting through colour) · Thermal camera (brightness as false-colour heat) · Caustic light (rainbow-fringed threads of focused light, over the picture too) · Diffraction (the ripples as a rainbow grating) · Sky reflection (each wave facet mirrors its own patch of sky) · Clear water (looking down through real water at the picture as the floor). From Oil slick on, each look is a colour effect laid over the rippled camera, so the picture keeps its own colours where the water is calm. Each look shows only the sliders that apply to it. |
+| Deform | How hard the water bends the picture beneath it. |
+| Effect | How strongly the look's colour is laid over the rippled camera: 0 is the plain rippled camera. |
 | Color cycle | How fast the psychedelic looks drift through colour. |
 | Grating | Diffraction: how ripple spacing maps to colour (nm of light per cell of spacing). |
-| Iridescence | Diffraction: strength of the colours. |
 | Light from | Diffraction and sky reflection: the direction the light (or sun) comes from. Color cycle circles it slowly. |
 | Sky | Sky reflection: sunset, aurora, neon dusk or midday. |
 | Sun height | Sky reflection: from a sun on the horizon (sunset colours) to high (daylight). |
-| Reflection | Sky reflection: how much sky the water mirrors. |
 | Depth | Clear water: how deep the water is (deeper is bluer). |
 | Caustics | Clear water: strength of the focused sunlight. |
 | Palette | Colour scheme, switchable live. |
@@ -64,7 +63,9 @@ the water to drop a stone in it.
 ## Natural colour
 
 Three looks take their colour from how real light meets water, steered by the
-shape of the surface rather than painted on:
+shape of the surface rather than painted on. Like the other colour looks they
+are laid over the rippled camera: calm water shows the picture as it is, and
+the colour comes with the waves.
 
 - **Diffraction.** The ripples are read as a grating, like the grooves of a CD.
   A small pass computes, per cell, the curvature and the slope's structure
@@ -73,12 +74,15 @@ shape of the surface rather than painted on:
   direction, and how orderly they are. Spacing × the angle to the light sets
   the wavelength of the first three diffraction orders (a fitted CIE spectrum
   turns those into colour); order sets the brightness, so only regular ripple
-  trains shine. Real ripples are about a thousand times too coarse to do this —
-  here they are read as if they were fine enough.
-- **Sky reflection.** Real water gets most of its colour from the sky it
+  trains shine, darkening the picture beneath them a little so the colours
+  show over bright parts of it. Real ripples are about a thousand times too
+  coarse to do this — here they are read as if they were fine enough.
+- **Sky reflection.** Real water gets much of its colour from the sky it
   mirrors. Each facet reflects the direction its normal sends the view; flat
   water sees overhead, tilted facets the horizon, so crests catch a sunset's
-  orange while flat water stays indigo.
+  orange. As in real water, looking straight down it mirrors little (the
+  picture shows through, lit by the sky's colour) and more the more a facet
+  tilts.
 - **Clear water.** Water absorbs red first, then green; troughs are deeper than
   crests, so they are bluer. It bends blue slightly more than red, and focuses
   sunlight into caustics, each colour a little apart. Light scattered in the
@@ -105,11 +109,17 @@ the water is doing, measured over a 16×8 grid of zones laid over the pool.
   the scale (a note already singing keeps its place until a rival is clearly
   stronger); *Glide* lets them sit on the spectrum's peaks and slide as those
   move. The body, a hole in the water, contributes nothing where it covers.
-  *Movement speed* picks the notes from how fast the body moves instead: one
-  pitch for the whole body, from its speed weighted towards its fastest parts
-  (0.003-0.03 of a zone per frame, onto the same three octaves), and the
-  scale notes nearest it sing from the side where the movement is. Slow
-  drifting sings low, quick gestures high, stillness is silent.
+  *Movement speed* lets the body play the resonators instead. The movement
+  itself is fed into them, so they sing while the body moves, as loud as the
+  movement is large, and fall silent within a second of it stopping. How fast
+  the contour moves picks the note: its speed in screens per second, measured
+  on the GPU as the mask's change over its slope (a contour moving at *v*
+  changes the mask by *v*·|∇m| per frame), weighted towards the parts that move
+  most. About 0.08-0.65 screens per second maps onto the three octaves, so each
+  doubling of speed is an octave up: a slow sway sings around A2, an arm swung
+  briskly near the top. The flicker of a still body's edge is measured on a
+  calmer copy of the mask, where back-and-forth noise cancels out, and gated by
+  a floor that learns how much a body at rest seems to move.
 
 A GPU pass reduces the pool to those zones every frame and the numbers are
 read back asynchronously, so the sound never stalls the picture. An automatic

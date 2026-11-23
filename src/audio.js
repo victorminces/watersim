@@ -13,6 +13,9 @@
 //               the character of the water changes. Snapped to a scale, or
 //               gliding to follow the spectrum's peaks freely. The body, a hole
 //               in the water, contributes nothing where it covers.
+//               Or, following movement speed: the body's own movement is fed
+//               to the resonators, so they sing while it moves, and how fast it
+//               moves picks the note, slow low and quick high.
 //
 // Because the resonators filter the water rather than a source of their own,
 // they breathe with it: silent when the pool is still, loudest when it surges.
@@ -33,14 +36,26 @@ export const SCALES = {
 // percentile), median ~2.5. Scales are rooted on A.
 const HZ_LO = 0.7;
 const HZ_HI = 4.5;
-// Movement speed onto pitch, for the "movement speed" mode. Zones whose
-// contour moves at least MOVE_MIN per frame count as moving; the body's speed
-// is their movement weighted towards the fastest, and SPEED_LO..SPEED_HI maps
-// it logarithmically onto the three octaves. Measured with the demo figure at
-// the default mask easing, that speed runs ~0.005 (slow) to ~0.02 (quick).
-const MOVE_MIN = 0.001;
-const SPEED_LO = 0.003;
-const SPEED_HI = 0.03;
+// Movement speed onto pitch, for the "movement speed" mode. Speed is how fast
+// the body's contour moves, in lengths of the screen's short side per second,
+// weighted towards the parts that move most (see REDUCE_FRAG); SPEED_LO..
+// SPEED_HI maps it logarithmically onto the three octaves: each doubling of
+// speed is an octave up, so an ordinary change of pace is a clear change of
+// note. Measured with a shape moving at known speeds, the reading is ~0.8x
+// the true speed (a contour's sides slide along themselves) and, at the
+// default mask easing, tops out near 0.7 once movement passes ~1 screen per
+// second. A body standing still reads ~0.01-0.06 where the segmenter's edge
+// flickers by a pixel or two; under SPEED_LO that is faded out.
+const SPEED_LO = 0.08;
+const SPEED_HI = 0.65;
+// How much of the body moves, as the share of the screen its contour sweeps
+// per second: MOVE_LO is the least that sings, MOVE_HI full voice. The bottom
+// also follows the quietest sweep of the last few seconds (the flicker of a
+// still body), so a body at rest falls silent wherever the segmenter's noise
+// lies.
+const MOVE_LO = 0.004;
+const MOVE_HI = 0.06;
+const MOVE_GAIN = 1.0;   // the movement's feed into the resonators at full voice
 const PITCH_LO = 110;    // A2: the demo's ripples then sing around A4-E5
 const SEMIS = 36;
 const PC_LO = 0;         // pitch class of the bottom band, counted up from A
@@ -73,6 +88,11 @@ export class WaterAudio {
     this.specX = new Float32Array(SEMIS);  // ... and where it is, as energy-weighted column
     this.peak = 0;
     this.energy = 0;
+    this.drive = 0;        // movement feeding the resonators (speed mode), 0..1
+    this.floor = MOVE_LO;  // the sweep of a body at rest: segmentation flicker
+    this.moveU = 0.3;      // the movement's place in the three octaves, 0..1
+    this.moveCol = (cols - 1) / 2;
+    this.move = { speed: 0, sweep: 0 }; // last measurement, for the console
     this.bank = [];      // one resonator per semitone, used snapped
     this.gliders = [];   // free resonators, used gliding
     this.active = new Set();
@@ -126,10 +146,14 @@ export class WaterAudio {
     this.bySpeed = mode === 'speed';
   }
 
-  // stats: Float32Array, 4 floats per zone, rows bottom to top (see REDUCE_FRAG).
-  // touching: whether the body acts on the water at all.
-  update(stats, velScale, stepsPerSecond, touching = true) {
+  // stats: Float32Array, 4 floats per zone, rows bottom to top: the water band,
+  // then the movement band (see REDUCE_FRAG).
+  // o.velScale: the reduce shader's velocity scale. o.stepsPerSecond: water
+  // steps per second. o.fps: frames per second. o.shortCells: grid cells across
+  // the screen's short side. o.touching: whether the body acts on the water.
+  update(stats, o) {
     if (!this.running) return;
+    const { velScale, stepsPerSecond, fps, shortCells, touching = true } = o;
     const now = this.ctx.currentTime;
     const dt = Math.min(0.1, Math.max(0.001, now - this.lastUpdate || 0.016));
     this.lastUpdate = now;
@@ -163,7 +187,6 @@ export class WaterAudio {
     const bins = new Float32Array(SEMIS);
     const binsX = new Float32Array(SEMIS);
     let surge = 0;
-    let moveSum = 0, moveSq = 0, moveX = 0; // body movement, for the speed mode
     for (let z = 0; z < n; z++) {
       const cover = Math.min(1, stats[z * 4 + 2] * 1.4);
       const a = Math.min(1.5, act[z] / this.ref) * (1 - cover);
@@ -172,15 +195,7 @@ export class WaterAudio {
       surge += Math.max(0, this.fast[z] - this.slow[z] - 0.03);
       if (touching) surge += Math.min(1, Math.max(0, stats[z * 4 + 3] - 0.012) / 0.012) * 0.12;
 
-      if (this.bySpeed) {
-        const m = stats[z * 4 + 3];
-        if (m >= MOVE_MIN) {
-          moveSum += m;
-          moveSq += m * m;
-          moveX += m * (z % this.cols);
-        }
-        continue;
-      }
+      if (this.bySpeed) continue;
 
       // Where in the three octaves this zone's ripple energy goes, and how much.
       if (a < 0.05 || hz[z] <= 0) continue;
@@ -194,33 +209,22 @@ export class WaterAudio {
         binsX[lo + 1] += w * f * col;
       }
     }
-    // Movement speed: one pitch for the whole body, from its overall speed
-    // weighted towards its fastest-moving parts. (Each zone voting its own
-    // speed into the spectrum barely moved the chord: a moving body always
-    // has slow parts and fast parts at once.) The notes nearest that pitch
-    // sing, from the side where the movement is; stillness is silence.
-    if (this.bySpeed && moveSum > 0) {
-      const speed = moveSq / moveSum;
-      const u = clamp01(Math.log(speed / SPEED_LO) / Math.log(SPEED_HI / SPEED_LO));
-      const centre = u * (SEMIS - 1), col = moveX / moveSum;
-      const amount = moveSum / MOVE_MIN;
+    if (this.bySpeed) {
+      this.#followMovement(stats, n, fps, shortCells, dt);
+    } else {
+      // Rise over ~0.2 s, fall over ~0.9 s: the spectrum follows the water's
+      // character, not every passing crest.
+      const up = 1 - Math.exp(-dt / 0.2);
+      const down = 1 - Math.exp(-dt / 0.9);
       for (let b = 0; b < SEMIS; b++) {
-        const d = b - centre, w = amount * Math.exp(-(d * d) / (2 * 1.5 * 1.5));
-        bins[b] += w;
-        binsX[b] += w * col;
+        const k = bins[b] > this.spec[b] ? up : down;
+        this.spec[b] += (bins[b] - this.spec[b]) * k;
+        this.specX[b] += (binsX[b] - this.specX[b]) * k;
       }
-    }
-
-    // Rise over ~0.2 s, fall over ~0.9 s: the spectrum follows the water's
-    // character, not every passing crest. Following movement speed, both are
-    // quick: a slow fall would leave the last fast gesture's high notes
-    // singing on after the body has slowed down.
-    const up = 1 - Math.exp(-dt / (this.bySpeed ? 0.15 : 0.2));
-    const down = 1 - Math.exp(-dt / (this.bySpeed ? 0.3 : 0.9));
-    for (let b = 0; b < SEMIS; b++) {
-      const k = bins[b] > this.spec[b] ? up : down;
-      this.spec[b] += (bins[b] - this.spec[b]) * k;
-      this.specX[b] += (binsX[b] - this.specX[b]) * k;
+      if (this.drive) {
+        this.drive = 0;
+        this.moveIn.gain.setTargetAtTime(0, now, 0.1);
+      }
     }
 
     // Peaks: waves arriving anywhere (measured drive ~0.08 / 0.65 / 1.8 at the
@@ -272,6 +276,52 @@ export class WaterAudio {
 
   // ------------------------------------------------------------- internals
 
+  // Movement speed: one pitch for the whole body, from how fast its contour
+  // moves, weighted towards the parts that move most. (Zones voting their own
+  // speeds barely moved the chord: a moving body always has slow parts and
+  // fast parts at once.) The movement itself feeds the resonators, so the note
+  // sounds while the body moves, as loud as the movement is large, and falls
+  // silent when it stops; the note nearest that pitch sings loudest, from the
+  // side where the movement is.
+  #followMovement(stats, n, fps, shortCells, dt) {
+    let dm = 0, dm2 = 0, x = 0;
+    for (let z = 0; z < n; z++) {
+      const k = (n + z) * 4;
+      dm += stats[k];
+      dm2 += stats[k + 1] / 100;
+      x += stats[k] * (z % this.cols);
+    }
+    const speed = dm > 1e-7 ? ((dm2 / dm) * fps) / shortCells : 0;
+    const sweep = (dm / n) * fps;
+    this.move = { speed, sweep, floor: this.floor };
+
+    // A contour that merely flickers is slow, and sweeps no more than it did
+    // a moment ago at rest: both gated out. Real movement keeps pausing and
+    // turning, so the floor (the quietest recent sweep) stays below it.
+    this.floor += (sweep - this.floor) * (1 - Math.exp(-dt / (sweep < this.floor ? 0.3 : 6)));
+    const lo = Math.max(MOVE_LO, Math.min(this.floor * 1.6, MOVE_HI * 0.4));
+    const gate = smooth01((speed - SPEED_LO * 0.5) / (SPEED_LO * 0.5));
+    const over = Math.log(Math.max(sweep, 1e-9) / lo);
+    // Even a small movement sings clearly; a large one sings full.
+    const amount = gate * smooth01(over / Math.LN2) * (0.4 + 0.6 * clamp01(over / Math.log(MOVE_HI / lo)));
+    this.drive += (amount - this.drive) * (1 - Math.exp(-dt / (amount > this.drive ? 0.05 : 0.3)));
+    if (amount > 0.05) {
+      const u = clamp01(Math.log(speed / SPEED_LO) / Math.log(SPEED_HI / SPEED_LO));
+      const k = 1 - Math.exp(-dt / 0.1);
+      this.moveU += (u - this.moveU) * k;
+      this.moveCol += (x / dm - this.moveCol) * k;
+    }
+    // Held while the movement fades, so a gesture's note rings out rather
+    // than sliding down to the bottom as it stops.
+    const centre = this.moveU * (SEMIS - 1);
+    for (let b = 0; b < SEMIS; b++) {
+      const d = b - centre;
+      this.spec[b] = this.drive * Math.exp(-(d * d) / 2);
+      this.specX[b] = this.spec[b] * this.moveCol;
+    }
+    this.moveIn.gain.setTargetAtTime(this.drive * MOVE_GAIN, this.ctx.currentTime, 0.04);
+  }
+
   // Snapped: each note of the scale gathers the ripple energy within a whole
   // tone of it; the strongest few sing. A note already singing keeps its place
   // until a rival is clearly stronger, so the chord does not flicker.
@@ -291,6 +341,10 @@ export class WaterAudio {
     }
     let top = 0;
     for (const c of cand) top = Math.max(top, c.e);
+    // Following movement, the spectrum is the movement itself, so its size is
+    // the notes' loudness: without this, the last note of a gesture would go
+    // on singing from the water after the body has stopped.
+    const norm = this.bySpeed ? Math.max(top, 0.5) : top;
     // Notes already singing rank as if 1.4x stronger: a rival must clearly win.
     const ranked = cand
       .filter((c) => c.e > top * 0.05)
@@ -302,7 +356,7 @@ export class WaterAudio {
     this.sounding = [];
     for (const c of cand) {
       const on = !quiet && keep.has(c.i);
-      const level = on ? Math.pow(c.e / top, 0.7) : 0;
+      const level = on ? Math.pow(c.e / norm, this.bySpeed ? 1.2 : 0.7) : 0;
       const pan = c.e > 0 ? colPanF(c.x / c.e, this.cols) * 0.85 : 0;
       this.#steer(this.bank[c.i], level, pan, now);
       if (on) this.sounding.push(noteName(this.bank[c.i].f) + ' ' + level.toFixed(2));
@@ -465,6 +519,9 @@ export class WaterAudio {
     this.toResonators.frequency.value = 85;
     this.toResonators.Q.value = 0.7;
     this.lap.connect(this.toResonators);
+    // Movement speed mode: the body's movement feeds the resonators directly.
+    this.moveIn = gainNode(ctx, 0);
+    src.connect(this.moveIn).connect(this.toResonators);
 
     this.waterLp = ctx.createBiquadFilter();
     this.waterLp.type = 'lowpass';
@@ -482,6 +539,11 @@ export class WaterAudio {
 
 function clamp01(x) {
   return x < 0 ? 0 : x > 1 ? 1 : x;
+}
+
+function smooth01(x) {
+  const t = clamp01(x);
+  return t * t * (3 - 2 * t);
 }
 
 function rippleU(hz) {

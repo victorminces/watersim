@@ -80,10 +80,15 @@ void main() {
   // Softness is fed back through the mask state instead: a tight blur applied
   // every frame compounds into a wide, smooth one, while the easing keeps
   // pulling the state back towards the camera so the body never melts away.
-  float prev = texture(uPrev, vUv).r;
+  vec4 last = texture(uPrev, vUv);
+  float prev = last.r;
   float base = mix(prev, prevBlur, clamp(uSoft, 0.0, 1.0));
   float eased = mix(base, m, uEase);
-  outColor = vec4(eased, eased - prev, 0.0, 1.0);
+  // A second, calmer copy, for measuring how fast the body moves: a contour
+  // that only flickers back and forth (segmentation noise) mostly cancels
+  // out in it, while one that really moves keeps its speed.
+  float calm = mix(last.b, eased, 0.25);
+  outColor = vec4(eased, eased - prev, calm, calm - last.b);
 }`;
 
 export const SPLAT_FRAG = `#version 300 es
@@ -287,12 +292,15 @@ vec3 skyColor(vec3 r, vec3 sunDir, float sunH, int sky, float time) {
 }`;
 
 // Shades the height field. Looks:
-//   0 water only, person as void       6 thermal camera
-//   1 camera seen through the water    7 caustic light
-//   2 rippled camera, colour fringes   8 diffraction: ripples as a rainbow grating
-//   3 oil slick                        9 sky reflection
-//   4 neon contours                   10 clear water: depth and light
-//   5 liquid trails (the picture smeared by the water)
+//   0 water only, person as void
+//   1 camera seen through the water
+//   2 rippled camera, colour fringes
+// and colour effects over the rippled camera:
+//   3 oil slick                        7 caustic light
+//   4 neon contours                    8 diffraction: ripples as a rainbow grating
+//   5 liquid trails (the picture       9 sky reflection
+//     smeared by the water)           10 clear water: depth and light
+//   6 thermal camera
 export const RENDER_FRAG = `#version 300 es
 precision highp float;
 in vec2 vUv;
@@ -312,11 +320,10 @@ uniform int uMode;
 uniform vec3 uDeep, uShallow, uSpec, uVoid, uRim;
 uniform sampler2D uGrate;   // ripple structure (look 8), see GRATE_FRAG
 uniform float uGrating;     // nm of light per cell of ripple spacing (look 8)
-uniform float uIrid;        // strength of the diffraction colours (look 8)
 uniform float uLightAz;     // direction the light comes from, radians (looks 8, 9)
 uniform int uSky;           // which sky (look 9)
 uniform float uSunH;        // sun height, 0..1 (look 9)
-uniform float uReflect;     // how much sky the water reflects (look 9)
+uniform float uFx;          // how strongly a colour effect is laid over the rippled camera (looks 3-10)
 uniform float uDepth;       // depth of the water (look 10)
 uniform float uCaustics;    // strength of the caustics (look 10)
 ${CAM_UV}
@@ -327,6 +334,18 @@ ${NATURAL}
 vec3 picture(vec2 uv, vec3 margin) {
   vec2 c = camUv(uv);
   return mix(margin, texture(uVideo, c).rgb, inCam(c));
+}
+
+// The camera picture bent by the water, each colour bent a little more than
+// the last: spread 1 gives strong colour fringes, 0 none.
+vec3 rippled(vec2 bend, float spread, vec3 margin) {
+  return vec3(picture(vUv + bend, margin).r,
+              picture(vUv + bend * (1.0 + 0.45 * spread), margin).g,
+              picture(vUv + bend * (1.0 + 0.9 * spread), margin).b);
+}
+
+float luma(vec3 c) {
+  return dot(c, vec3(0.299, 0.587, 0.114));
 }
 
 // Curvature of the surface: negative where it bulges up, a converging lens
@@ -376,107 +395,114 @@ void main() {
     col = mix(bent, bent * tint * 2.4, 0.45);
     col += uSpec * (spec * 0.9 + sheen * 0.4) + uShallow * caustic * 0.18;
     col = mix(col, flat_ * 0.9, step(0.5, texture(uMask, vUv).r));
-  } else if (uMode == 2) {
-    // Rippled camera: the water bends the picture, and bends each colour a
-    // little differently, like a lens with too much dispersion.
+  } else if (uMode >= 2) {
+    // From here on every look is the rippled camera, with its colour effect
+    // laid on top. The water bends the picture, each colour a little more
+    // than the last, like a lens with too much dispersion; where the body is
+    // there is no water to bend it.
     vec3 m = uDeep * 0.5;
-    col = vec3(picture(vUv + bend, m).r, picture(vUv + bend * 1.45, m).g, picture(vUv + bend * 1.9, m).b);
-    col += uSpec * (spec * 0.8 + sheen * 0.3);
-    col = mix(col, picture(vUv, m), body * 0.7);
-  } else if (uMode == 3) {
-    // Oil slick: a thin film on the water, its colour set by its thickness,
-    // which the waves stretch and squeeze. The picture shows dimly beneath.
-    float film = h * 2.5 * uRelief + length(slope) * 6.0 + hue * 0.25;
-    float sheet = clamp(0.2 + length(slope) * 10.0, 0.0, 1.0);
-    col = picture(vUv + bend * 0.5, vec3(0.02)) * 0.35 + rainbow(film) * sheet * 0.85 + uSpec * spec;
-    col = mix(col, picture(vUv, vec3(0.0)), body);
-  } else if (uMode == 4) {
-    // Neon contours: lines of equal height, each its own colour, glowing over a
-    // faint, bent picture.
-    float f = h * 14.0 * uRelief + 0.5;
-    float d = abs(fract(f + 0.5) - 0.5);    // distance to the nearest contour
-    float w = max(fwidth(f), 1e-4);
-    float line = 1.0 - smoothstep(0.0, w * 1.3, d);
-    float glow = 1.0 - smoothstep(0.0, w * 5.0, d);
-    vec3 neon = rainbow(floor(f + 0.5) * 0.13 + hue * 0.3);
-    col = picture(vUv + bend, vec3(0.0)) * 0.12 + neon * (line * 1.2 + glow * 0.35);
-    col = mix(col, picture(vUv, vec3(0.0)) * 0.35, body);
-  } else if (uMode == 5) {
-    // Liquid trails: drawn by the feedback pass; just add the light.
-    col = texture(uTrail, vUv).rgb + uSpec * (spec * 0.6 + sheen * 0.2);
-  } else if (uMode == 6) {
-    // Thermal camera: brightness read as heat on a rainbow scale, the picture
-    // warped by the water and the body running hot.
-    vec3 p = picture(vUv + bend, vec3(0.0));
-    float lum = dot(p, vec3(0.299, 0.587, 0.114));
-    col = rainbow(lum * 1.1 + h * 0.6 * uRelief + body * 0.35 + hue * 0.2) * (0.35 + 0.75 * lum + 0.2 * body);
-    col += uSpec * spec * 0.6;
-  } else if (uMode == 7) {
-    // Caustic light: the waves focus light into bright threads on whatever is
-    // below, the picture included, and each colour focuses in a slightly
-    // different place.
-    vec2 disp = normalize(slope + vec2(1e-6)) * uTexel * 4.0;
-    vec3 light = clamp(-vec3(curvAt(vUv - disp, t), curvAt(vUv, t), curvAt(vUv + disp, t)) * uRelief * 24.0, 0.0, 3.0);
-    vec3 tint = mix(mix(uShallow, vec3(1.0), 0.4), rainbow(hue * 0.4 + vUv.x * 0.6 + vUv.y * 0.3), 0.65);
-    vec3 lit = 0.5 + tint * light * 2.2;
-    col = picture(vUv + bend * 0.6, uDeep * 0.6) * lit + uSpec * spec * 0.5;
-    col = mix(col, picture(vUv, uDeep * 0.6) * (0.55 + light * 0.8), body);
-  } else if (uMode == 8) {
-    // Diffraction: the ripples as a grating, like the grooves of a CD. Their
-    // spacing sets the colour (wider spacing, longer wavelength), their
-    // direction against the light sweeps it through the rainbow, and only
-    // orderly ripple trains shine; churned water stays dark and silvery.
-    // Real ripples are about a thousand times too coarse for this; here they
-    // are read as if they were fine enough.
-    vec2 q = uTexel * 2.5;
-    vec4 g = (texture(uGrate, vUv) * 2.0 + texture(uGrate, vUv + q) + texture(uGrate, vUv - q)
-            + texture(uGrate, vUv + vec2(q.x, -q.y)) + texture(uGrate, vUv + vec2(-q.x, q.y))) / 6.0;
-    float energy = g.y + g.z;                              // mean squared slope (scaled)
-    float k = sqrt(max(g.x, 1e-9) / max(energy, 1e-9) * (25.0 / 400.0)); // ripple wavenumber, rad per cell
-    float spacing = 6.28318 / max(k, 1e-3);                // cells between crests
-    float across = 0.5 * atan(2.0 * g.w, g.y - g.z + 1e-9); // direction across the crests (defined on still water too)
-    float order = sqrt((g.y - g.z) * (g.y - g.z) + 4.0 * g.w * g.w) / max(energy, 1e-9); // 1: one clean direction
-    float light = uLightAz + hue * 0.5;
-    float nm = spacing * uGrating * abs(cos(across - light));
-    // First three orders: wide ripples, too coarse to colour the first order,
-    // still colour the second and third, as on a real grating.
-    vec3 rainbowLight = spectral(nm) + spectral(nm / 2.0) * 0.6 + spectral(nm / 3.0) * 0.4;
-    float shine = order * order * smoothstep(0.0005, 0.015, energy) * uIrid;
-    vec3 under = uDeep * 0.35 + picture(vUv + bend * 0.4, vec3(0.0)) * 0.18;
-    col = under + rainbowLight * shine * 1.5 + uSpec * spec * 0.5;
-    col = mix(col, picture(vUv, vec3(0.0)) * 0.6 + rainbowLight * shine * 0.3, body);
-  } else if (uMode == 9) {
-    // Sky reflection: each facet of the water mirrors its own patch of sky.
-    // Flat water sees overhead; tilted facets look towards the horizon, so the
-    // waves carry the sky's whole range of colour.
-    vec3 r = reflect(vec3(0.0, 0.0, -1.0), n);
-    float sunEl = mix(0.03, 1.25, uSunH);
-    float sunAz = uLightAz + hue * 0.3;
-    vec3 sunDir = vec3(cos(sunEl) * cos(sunAz), cos(sunEl) * sin(sunAz), sin(sunEl));
-    vec3 sky = skyColor(r, sunDir, uSunH, uSky, uTime);
-    vec3 ambient = 0.5 * (skyColor(vec3(0.0, 0.0, 1.0), sunDir, uSunH, uSky, uTime)
-                        + skyColor(normalize(vec3(cos(sunAz), sin(sunAz), 0.15)), sunDir, uSunH, uSky, uTime));
-    float mirror = uReflect * mix(0.6, 1.0, sqrt(1.0 - n.z));
-    vec3 under = picture(vUv + bend * 0.4, uDeep * 0.5) * (0.15 + ambient * 0.35);
-    col = mix(under, sky, clamp(mirror, 0.0, 1.0));
-    col = mix(col, picture(vUv, uDeep * 0.5) * (0.35 + ambient * 0.9), body);
-  } else if (uMode == 10) {
-    // Clear water: looking down through it at the picture as the floor. Water
-    // soaks up red first, then green, so the deeper the water (troughs deeper
-    // than crests) the bluer the floor; it also bends blue a little more than
-    // red, and the waves focus sunlight into caustics, each colour slightly
-    // apart. Light scattered by the water itself gives it its own glow.
-    float d = max(0.05, uDepth * (1.0 - h * 1.5 * uRelief));
-    vec3 through = exp(-vec3(0.65, 0.18, 0.08) * d * 2.0);       // down and back up
-    vec3 sand = vec3(0.76, 0.70, 0.55) * 0.6;
-    vec3 floor_ = vec3(picture(vUv + bend * 0.9, sand).r, picture(vUv + bend, sand).g, picture(vUv + bend * 1.12, sand).b);
-    vec2 disp = normalize(slope + vec2(1e-6)) * uTexel * 1.5;
-    vec3 focus = clamp(-vec3(curvAt(vUv - disp, t), curvAt(vUv, t), curvAt(vUv + disp, t)) * uRelief * 18.0, 0.0, 3.0) * uCaustics;
-    col = floor_ * through * (0.55 + focus * 1.5) * vec3(1.0, 0.97, 0.9);
-    col += (1.0 - through) * vec3(0.0, 0.10, 0.14);               // the water's own glow
-    float F = 0.02 + 0.98 * pow(1.0 - n.z, 5.0);
-    col = mix(col, vec3(0.55, 0.70, 0.90), F * 0.8) + vec3(1.0) * spec * 0.8;
-    col = mix(col, picture(vUv, sand) * (0.6 + focus * 0.5), body);
+    vec3 cam = rippled(bend, uMode >= 8 ? 0.3 : 1.0, m);
+    vec3 still = picture(vUv, m);
+    vec3 glare = uSpec * (spec * 0.8 + sheen * 0.3);
+    float fx = uFx, fx1 = clamp(uFx, 0.0, 1.0);
+
+    if (uMode == 2) {
+      col = cam + glare;
+      col = mix(col, still, body * 0.7);
+    } else if (uMode == 3) {
+      // Oil slick: a thin film on the water, its colour set by its thickness,
+      // which the waves stretch and squeeze. It tints what shows through it.
+      float film = h * 2.5 * uRelief + length(slope) * 6.0 + hue * 0.25;
+      float sheet = clamp((0.05 + length(slope) * 12.0) * fx, 0.0, 1.0); // flat water: barely any film
+      vec3 oil = rainbow(film);
+      col = mix(cam, cam * (0.3 + oil * 1.25) + oil * 0.1, sheet) + glare;
+      col = mix(col, still, body);
+    } else if (uMode == 4) {
+      // Neon contours: lines of equal height, each its own colour, glowing
+      // over the picture.
+      float f = h * 14.0 * uRelief + 0.5;
+      float d = abs(fract(f + 0.5) - 0.5);    // distance to the nearest contour
+      float w = max(fwidth(f), 1e-4);
+      float line = 1.0 - smoothstep(0.0, w * 1.3, d);
+      float glow = 1.0 - smoothstep(0.0, w * 5.0, d);
+      vec3 neon = rainbow(floor(f + 0.5) * 0.13 + hue * 0.3);
+      col = cam * (1.0 - 0.35 * fx1) + neon * (line * 1.1 + glow * 0.3) * fx + glare * 0.5;
+      col = mix(col, still, body);
+    } else if (uMode == 5) {
+      // Liquid trails: drawn by the feedback pass.
+      col = mix(cam, texture(uTrail, vUv).rgb, fx1) + glare * 0.7;
+    } else if (uMode == 6) {
+      // Thermal camera: brightness read as heat on a rainbow scale, the water
+      // shifting it and the body running hot.
+      float lum = luma(cam);
+      vec3 heat = rainbow(lum * 1.1 + h * 0.6 * uRelief + body * 0.35 + hue * 0.2) * (0.35 + 0.75 * lum + 0.2 * body);
+      col = mix(cam, heat, clamp(fx * 0.6, 0.0, 1.0)) + glare * 0.6;
+    } else if (uMode == 7) {
+      // Caustic light: the waves focus light into bright threads on the
+      // picture, each colour focused in a slightly different place.
+      vec2 disp = normalize(slope + vec2(1e-6)) * uTexel * 4.0;
+      vec3 light = clamp(-vec3(curvAt(vUv - disp, t), curvAt(vUv, t), curvAt(vUv + disp, t)) * uRelief * 24.0, 0.0, 3.0);
+      vec3 tint = mix(mix(uShallow, vec3(1.0), 0.4), rainbow(hue * 0.4 + vUv.x * 0.6 + vUv.y * 0.3), 0.65);
+      col = cam * (1.0 - 0.25 * fx1 + tint * light * 1.8 * fx) + tint * light * 0.12 * fx + glare * 0.5;
+      col = mix(col, still, body);
+    } else if (uMode == 8) {
+      // Diffraction: the ripples as a grating, like the grooves of a CD. Their
+      // spacing sets the colour (wider spacing, longer wavelength), their
+      // direction against the light sweeps it through the rainbow, and only
+      // orderly ripple trains shine; churned and flat water show the picture
+      // plainly. Real ripples are about a thousand times too coarse for this;
+      // here they are read as if they were fine enough.
+      vec2 q = uTexel * 2.5;
+      vec4 g = (texture(uGrate, vUv) * 2.0 + texture(uGrate, vUv + q) + texture(uGrate, vUv - q)
+              + texture(uGrate, vUv + vec2(q.x, -q.y)) + texture(uGrate, vUv + vec2(-q.x, q.y))) / 6.0;
+      float energy = g.y + g.z;                              // mean squared slope (scaled)
+      float k = sqrt(max(g.x, 1e-9) / max(energy, 1e-9) * (25.0 / 400.0)); // ripple wavenumber, rad per cell
+      float spacing = 6.28318 / max(k, 1e-3);                // cells between crests
+      float across = 0.5 * atan(2.0 * g.w, g.y - g.z + 1e-9); // direction across the crests (defined on still water too)
+      float order = sqrt((g.y - g.z) * (g.y - g.z) + 4.0 * g.w * g.w) / max(energy, 1e-9); // 1: one clean direction
+      float light = uLightAz + hue * 0.5;
+      float nm = spacing * uGrating * abs(cos(across - light));
+      // First three orders: wide ripples, too coarse to colour the first order,
+      // still colour the second and third, as on a real grating.
+      vec3 rainbowLight = spectral(nm) + spectral(nm / 2.0) * 0.6 + spectral(nm / 3.0) * 0.4;
+      float shine = order * order * smoothstep(0.0003, 0.01, energy) * fx;
+      // Over a bright picture the colours need room: what shines darkens the
+      // picture beneath it, as a grating's glare would wash it out.
+      col = cam * (1.0 - 0.45 * clamp(shine, 0.0, 1.0)) + rainbowLight * shine * 2.0 + glare * 0.5;
+      col = mix(col, still, body);
+    } else if (uMode == 9) {
+      // Sky reflection: each facet of the water mirrors its own patch of sky.
+      // Like real water it mirrors little looking straight down, and more the
+      // more a facet tilts towards the horizon, so the picture shows through
+      // the flat water and the waves carry the sky's colour.
+      vec3 r = reflect(vec3(0.0, 0.0, -1.0), n);
+      float sunEl = mix(0.03, 1.25, uSunH);
+      float sunAz = uLightAz + hue * 0.3;
+      vec3 sunDir = vec3(cos(sunEl) * cos(sunAz), cos(sunEl) * sin(sunAz), sin(sunEl));
+      vec3 sky = skyColor(r, sunDir, uSunH, uSky, uTime);
+      vec3 ambient = 0.5 * (skyColor(vec3(0.0, 0.0, 1.0), sunDir, uSunH, uSky, uTime)
+                          + skyColor(normalize(vec3(cos(sunAz), sin(sunAz), 0.15)), sunDir, uSunH, uSky, uTime));
+      vec3 tint = ambient / max(max(ambient.r, max(ambient.g, ambient.b)), 0.05); // the sky's light, at full brightness
+      float mirror = clamp(fx * (0.06 + 1.1 * sqrt(1.0 - n.z)), 0.0, 1.0);
+      col = mix(cam * mix(vec3(1.0), tint, 0.35 * fx1), sky, mirror);
+      col = mix(col, still * mix(vec3(1.0), tint, 0.25 * fx1), body);
+    } else {
+      // Clear water: looking down through it at the picture as the floor.
+      // Water soaks up red first, then green, so the deeper the water (troughs
+      // deeper than crests) the bluer the floor; the waves focus sunlight into
+      // caustics, each colour slightly apart. Light scattered by the water
+      // itself gives it its own glow.
+      float d = max(0.05, uDepth * (1.0 - h * 1.5 * uRelief));
+      vec3 through = exp(-vec3(0.22, 0.06, 0.025) * d * 2.0);      // down and back up
+      vec2 disp = normalize(slope + vec2(1e-6)) * uTexel * 1.5;
+      vec3 focus = clamp(-vec3(curvAt(vUv - disp, t), curvAt(vUv, t), curvAt(vUv + disp, t)) * uRelief * 18.0, 0.0, 3.0) * uCaustics;
+      vec3 water = cam * through * (0.95 + focus * 1.3) * vec3(1.0, 0.98, 0.93);
+      water += (1.0 - through) * vec3(0.0, 0.12, 0.16);             // the water's own glow
+      float F = 0.02 + 0.98 * pow(1.0 - n.z, 5.0);
+      water = mix(water, vec3(0.55, 0.70, 0.90), F * 0.8) + vec3(1.0) * spec * 0.8;
+      col = mix(cam + glare, water, fx1);
+      col = mix(col, still, body);
+    }
   } else {
     // Rest height sits near the deep end so that crests, not the flat pool,
     // carry the light.
@@ -572,13 +598,23 @@ void main() {
   outColor = vec4(mix(prev, cam, feed), 1.0);
 }`;
 
-// Boils the pool down to one texel per sound zone (the target is cols x rows).
-// Sixteen-by-sixteen samples per zone is plenty for a mean of squares, and keeps
-// the loop bounds constant.
+// Boils the pool down to one texel per sound zone. The target is cols x
+// 2*rows: the bottom band is the water, the top band the body's movement.
+// Sixteen-by-sixteen samples per zone is plenty for a mean, and keeps the loop
+// bounds constant.
+// Water band:
 //   r = mean squared velocity, scaled  -> how hard the water moves here
 //   g = mean squared height            -> with r, gives the ripple frequency
 //   b = mean body coverage             -> the body silences what it covers
 //   a = mean contour movement          -> splashes
+// Movement band, over the contour only (where the mask has a slope):
+// measured on the mask's calm copy (see MASK_FRAG):
+//   r = mean |dm/dt|                   -> how much of the body moves
+//   g = mean |dm/dt|^2 / |grad m|, x100 -> divided by r, how fast it moves:
+//       a contour moving at v cells per frame changes the mask by v |grad m|
+//       per frame, so the ratio is its speed, weighted towards the parts
+//       that move most (and blind to the mask merely fading in or out)
+//   b = mean |grad m|                  -> how much contour there is
 export const REDUCE_FRAG = `#version 300 es
 precision highp float;
 out vec4 outColor;
@@ -586,19 +622,31 @@ out vec4 outColor;
 uniform sampler2D uSim;
 uniform sampler2D uMask;
 uniform vec2 uZones;
+uniform vec2 uTexel;     // of the grid
 uniform float uVelScale; // lifts tiny per-substep velocities clear of half-float underflow
 
 void main() {
+  vec2 zone = floor(gl_FragCoord.xy);
+  bool moving = zone.y >= uZones.y;
+  if (moving) zone.y -= uZones.y;
   vec2 size = 1.0 / uZones;
-  vec2 base = floor(gl_FragCoord.xy) * size;
+  vec2 base = zone * size;
   vec4 acc = vec4(0.0);
   for (int y = 0; y < 16; y++) {
     for (int x = 0; x < 16; x++) {
       vec2 uv = base + (vec2(float(x), float(y)) + 0.5) / 16.0 * size;
-      vec2 s = texture(uSim, uv).rg;
-      vec2 m = texture(uMask, uv).rg;
-      float v = (s.x - s.y) * uVelScale;
-      acc += vec4(v * v, s.x * s.x, m.r, abs(m.g));
+      vec4 m = texture(uMask, uv);
+      if (moving) {
+        float gx = texture(uMask, uv + vec2(uTexel.x, 0.0)).b - texture(uMask, uv - vec2(uTexel.x, 0.0)).b;
+        float gy = texture(uMask, uv + vec2(0.0, uTexel.y)).b - texture(uMask, uv - vec2(0.0, uTexel.y)).b;
+        float grad = 0.5 * length(vec2(gx, gy));
+        float dm = grad > 0.004 ? abs(m.a) : 0.0;
+        acc += vec4(dm, dm * dm / max(grad, 0.004) * 100.0, grad, 0.0);
+      } else {
+        vec2 s = texture(uSim, uv).rg;
+        float v = (s.x - s.y) * uVelScale;
+        acc += vec4(v * v, s.x * s.x, m.r, abs(m.g));
+      }
     }
   }
   outColor = acc / 256.0;

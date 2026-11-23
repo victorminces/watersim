@@ -108,8 +108,8 @@ function initGL() {
   progTrail = new Program(gl, VERT, TRAIL_FRAG);
   progGrate = new Program(gl, VERT, GRATE_FRAG);
   progReduce = new Program(gl, VERT, REDUCE_FRAG);
-  statsTarget = makeTarget(gl, ZONES_X, ZONES_Y);
-  readback = new Readback(gl, ZONES_X, ZONES_Y);
+  statsTarget = makeTarget(gl, ZONES_X, ZONES_Y * 2); // water band, then movement band
+  readback = new Readback(gl, ZONES_X, ZONES_Y * 2);
 
   texRawCam = makeTexture(gl);
   texRawDemo = makeTexture(gl);
@@ -534,11 +534,10 @@ function runRenderPass(videoTex, xform, now) {
     .tex('uTrail', trail.read.tex)
     .tex('uGrate', grate.tex)
     .f('uGrating', +ui.grating.value)
-    .f('uIrid', +ui.irid.value)
     .f('uLightAz', +ui.lightaz.value * Math.PI / 180)
     .i('uSky', SKIES[ui.sky.value] ?? 0)
     .f('uSunH', +ui.sunh.value)
-    .f('uReflect', +ui.reflect.value)
+    .f('uFx', +ui.fx.value)
     .f('uDepth', +ui.depth.value)
     .f('uCaustics', +ui.causticamt.value)
     .v2('uTexel', 1 / simW, 1 / simH)
@@ -564,6 +563,7 @@ function runReducePass() {
     .tex('uSim', sim.read.tex)
     .tex('uMask', mask.read.tex)
     .v2('uZones', ZONES_X, ZONES_Y)
+    .v2('uTexel', 1 / simW, 1 / simH)
     .f('uVelScale', VEL_SCALE);
   quad.draw();
 }
@@ -596,8 +596,13 @@ function step(now) {
 
   // Zone stats requested on an earlier frame; the GPU is usually done by now.
   if (readback.poll() && audio.running) {
-    audio.update(readback.out, VEL_SCALE, SUBSTEPS / frameDt,
-      ui.obstacle.checked || ui.ripples.checked);
+    audio.update(readback.out, {
+      velScale: VEL_SCALE,
+      stepsPerSecond: SUBSTEPS / frameDt,
+      fps: 1 / frameDt,
+      shortCells: Math.min(simW, simH),
+      touching: ui.obstacle.checked || ui.ripples.checked,
+    });
   }
 
   if (source === 'camera') {
@@ -627,9 +632,10 @@ function step(now) {
   runMaskPass(rawTex, xform);
   if (drops.length) runSplatPass();
   for (let i = 0; i < SUBSTEPS; i++) runSimPass(i);
-  if (+ui.look.value === 5) runTrailPass(videoTex, xform);
-  if (+ui.look.value === 8) runGratePass();
+  const look = +ui.look.value;
+  if (look === 5) runTrailPass(videoTex, xform);
   else trailFresh = true; // start clean next time the look is picked
+  if (look === 8) runGratePass();
   runRenderPass(videoTex, xform, now);
   if (audio.running && !readback.pending) {
     runReducePass();
@@ -670,7 +676,7 @@ const ui = {};
 for (const id of ['obstacle', 'ripples', 'look', 'palette', 'speed', 'damp', 'push',
   'relief', 'refract', 'rain', 'mirror', 'invert', 'soft', 'ease', 'showmask',
   'sound', 'volume', 'melody', 'voices', 'clarity', 'slush', 'water', 'pitch', 'scale', 'detail', 'framing',
-  'deform', 'cycle', 'grating', 'irid', 'lightaz', 'sky', 'sunh', 'reflect', 'depth', 'causticamt']) {
+  'deform', 'cycle', 'grating', 'fx', 'lightaz', 'sky', 'sunh', 'depth', 'causticamt']) {
   ui[id] = el(id);
 }
 
@@ -804,15 +810,16 @@ try {
     get gl() { return gl; }, get sim() { return sim; }, get mask() { return mask; },
     get audio() { return audio; }, get stats() { return readback.out; }, get drops() { return drops; },
     get segmenter() { return segmenter; },
+    get demo() { return demo; }, // swap demo.update to drive a test silhouette
     // Advance one frame by hand at a chosen timestamp (ms), e.g. to measure the
     // pool at a steady 60 fps in a throttled background tab.
     step,
     // Zone stats right now, read synchronously.
     zoneStats() {
       runReducePass();
-      const out = new Float32Array(ZONES_X * ZONES_Y * 4);
+      const out = new Float32Array(ZONES_X * ZONES_Y * 2 * 4);
       gl.bindFramebuffer(gl.FRAMEBUFFER, statsTarget.fbo);
-      gl.readPixels(0, 0, ZONES_X, ZONES_Y, gl.RGBA, gl.FLOAT, out);
+      gl.readPixels(0, 0, ZONES_X, ZONES_Y * 2, gl.RGBA, gl.FLOAT, out);
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       return out;
     },
