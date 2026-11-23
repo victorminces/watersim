@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Water Contour</title>
-<link rel="stylesheet" href="style.css?v=20261119204704">
+<link rel="stylesheet" href="style.css?v=20261123101735">
 </head>
 <body>
 <canvas id="stage"></canvas>
@@ -34,8 +34,16 @@
       <select id="look">
         <option value="0">Water only &mdash; person as void</option>
         <option value="1" selected>Camera seen through the water</option>
+        <option value="2">Rippled camera &mdash; colour fringes</option>
+        <option value="3">Oil slick</option>
+        <option value="4">Neon contours</option>
+        <option value="5">Liquid trails</option>
+        <option value="6">Thermal camera</option>
+        <option value="7">Caustic light</option>
       </select>
     </label>
+    <label class="sl">Deform <input type="range" id="deform" min="0" max="3" step="0.05" value="1"></label>
+    <label class="sl">Color cycle <input type="range" id="cycle" min="0" max="1.5" step="0.01" value="0.3"></label>
     <label class="sel">Palette
       <select id="palette"></select>
     </label>
@@ -74,8 +82,9 @@
     <label class="sl">Clarity <input type="range" id="clarity" min="8" max="150" step="1" value="150"></label>
     <label class="sel">Pitch
       <select id="pitch">
-        <option value="snap">Snap to scale</option>
-        <option value="glide">Glide with the ripples</option>
+        <option value="snap">Ripple size, on the scale</option>
+        <option value="glide">Ripple size, gliding</option>
+        <option value="speed">Movement speed, on the scale</option>
       </select>
     </label>
     <label class="sel">Scale
@@ -94,6 +103,6 @@
 <button id="btn-panel" class="ghost small" hidden>Controls</button>
 <div id="toast" role="status" hidden></div>
 
-<script type="module" src="src/main.js?v=20261119204704"></script>
+<script type="module" src="src/main.js?v=20261123101735"></script>
 </body>
 </html>

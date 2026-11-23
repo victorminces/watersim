@@ -33,6 +33,14 @@ export const SCALES = {
 // percentile), median ~2.5. Scales are rooted on A.
 const HZ_LO = 0.7;
 const HZ_HI = 4.5;
+// Movement speed onto pitch, for the "movement speed" mode. Zones whose
+// contour moves at least MOVE_MIN per frame count as moving; the body's speed
+// is their movement weighted towards the fastest, and SPEED_LO..SPEED_HI maps
+// it logarithmically onto the three octaves. Measured with the demo figure at
+// the default mask easing, that speed runs ~0.005 (slow) to ~0.02 (quick).
+const MOVE_MIN = 0.001;
+const SPEED_LO = 0.003;
+const SPEED_HI = 0.03;
 const PITCH_LO = 110;    // A2: the demo's ripples then sing around A4-E5
 const SEMIS = 36;
 const PC_LO = 0;         // pitch class of the bottom band, counted up from A
@@ -54,7 +62,8 @@ export class WaterAudio {
     this.rows = rows;
     this.ctx = null;
     this.scale = Object.keys(SCALES)[0];
-    this.snap = true;
+    this.snap = true;      // pitches on the scale, or gliding freely
+    this.bySpeed = false;  // pitch from how fast the body moves, not from ripple size
     this.mode = null;
     this.ref = MIN_REF * 2;
     const n = cols * rows;
@@ -110,8 +119,11 @@ export class WaterAudio {
     if (SCALES[name]) this.scale = name;
   }
 
-  setSnap(on) {
-    this.snap = on;
+  // 'snap': ripple size, on the scale. 'glide': ripple size, sliding freely.
+  // 'speed': how fast the body moves, on the scale.
+  setPitch(mode) {
+    this.snap = mode !== 'glide';
+    this.bySpeed = mode === 'speed';
   }
 
   // stats: Float32Array, 4 floats per zone, rows bottom to top (see REDUCE_FRAG).
@@ -151,6 +163,7 @@ export class WaterAudio {
     const bins = new Float32Array(SEMIS);
     const binsX = new Float32Array(SEMIS);
     let surge = 0;
+    let moveSum = 0, moveSq = 0, moveX = 0; // body movement, for the speed mode
     for (let z = 0; z < n; z++) {
       const cover = Math.min(1, stats[z * 4 + 2] * 1.4);
       const a = Math.min(1.5, act[z] / this.ref) * (1 - cover);
@@ -159,9 +172,21 @@ export class WaterAudio {
       surge += Math.max(0, this.fast[z] - this.slow[z] - 0.03);
       if (touching) surge += Math.min(1, Math.max(0, stats[z * 4 + 3] - 0.012) / 0.012) * 0.12;
 
+      if (this.bySpeed) {
+        const m = stats[z * 4 + 3];
+        if (m >= MOVE_MIN) {
+          moveSum += m;
+          moveSq += m * m;
+          moveX += m * (z % this.cols);
+        }
+        continue;
+      }
+
+      // Where in the three octaves this zone's ripple energy goes, and how much.
       if (a < 0.05 || hz[z] <= 0) continue;
-      const s = Math.min(SEMIS - 1, rippleU(hz[z]) * (SEMIS - 1));
-      const lo = Math.floor(s), f = s - lo, w = a * a, col = z % this.cols;
+      const u = rippleU(hz[z]), w = a * a;
+      const s = Math.min(SEMIS - 1, u * (SEMIS - 1));
+      const lo = Math.floor(s), f = s - lo, col = z % this.cols;
       bins[lo] += w * (1 - f);
       binsX[lo] += w * (1 - f) * col;
       if (lo + 1 < SEMIS) {
@@ -169,9 +194,29 @@ export class WaterAudio {
         binsX[lo + 1] += w * f * col;
       }
     }
+    // Movement speed: one pitch for the whole body, from its overall speed
+    // weighted towards its fastest-moving parts. (Each zone voting its own
+    // speed into the spectrum barely moved the chord: a moving body always
+    // has slow parts and fast parts at once.) The notes nearest that pitch
+    // sing, from the side where the movement is; stillness is silence.
+    if (this.bySpeed && moveSum > 0) {
+      const speed = moveSq / moveSum;
+      const u = clamp01(Math.log(speed / SPEED_LO) / Math.log(SPEED_HI / SPEED_LO));
+      const centre = u * (SEMIS - 1), col = moveX / moveSum;
+      const amount = moveSum / MOVE_MIN;
+      for (let b = 0; b < SEMIS; b++) {
+        const d = b - centre, w = amount * Math.exp(-(d * d) / (2 * 1.5 * 1.5));
+        bins[b] += w;
+        binsX[b] += w * col;
+      }
+    }
+
     // Rise over ~0.2 s, fall over ~0.9 s: the spectrum follows the water's
-    // character, not every passing crest.
-    const up = 1 - Math.exp(-dt / 0.2), down = 1 - Math.exp(-dt / 0.9);
+    // character, not every passing crest. Following movement speed, both are
+    // quick: a slow fall would leave the last fast gesture's high notes
+    // singing on after the body has slowed down.
+    const up = 1 - Math.exp(-dt / (this.bySpeed ? 0.15 : 0.2));
+    const down = 1 - Math.exp(-dt / (this.bySpeed ? 0.3 : 0.9));
     for (let b = 0; b < SEMIS; b++) {
       const k = bins[b] > this.spec[b] ? up : down;
       this.spec[b] += (bins[b] - this.spec[b]) * k;
@@ -433,6 +478,10 @@ export class WaterAudio {
 
     this.lastUpdate = ctx.currentTime;
   }
+}
+
+function clamp01(x) {
+  return x < 0 ? 0 : x > 1 ? 1 : x;
 }
 
 function rippleU(hz) {

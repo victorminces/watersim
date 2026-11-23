@@ -26,13 +26,15 @@ the water to drop a stone in it.
 | --- | --- |
 | Solid obstacle | The silhouette is a wall: waves reflect off the contour and cannot cross it. |
 | Motion ripples | A moving contour shoves the water, so the body radiates waves as it moves. |
-| Look | Water only (body is an empty void), or the camera image seen through the refracting water. |
+| Look | Water only (body is an empty void) · Camera seen through the water · Rippled camera (the water bends the picture, each colour differently) · Oil slick (an iridescent film on the waves) · Neon contours (lines of equal height, each its own colour) · Liquid trails (the picture smeared along by the waves and drifting through colour) · Thermal camera (brightness as false-colour heat) · Caustic light (rainbow-fringed threads of focused light, over the picture too). |
+| Deform | How hard the water bends the picture in the rippled, oil, neon, trails, thermal and caustic looks. |
+| Color cycle | How fast the psychedelic looks drift through colour. |
 | Palette | Colour scheme, switchable live. |
 | Wave speed | Propagation speed (c², capped at 0.45 for stability). |
 | Wave life | How long waves survive before damping out. |
 | Ripple push | How hard contour motion drives the water. |
 | Relief | Vertical exaggeration — contrast of the shading. |
-| Refraction | Bend of the camera image under the waves (second look only). |
+| Refraction | Bend of the camera image under the waves (the camera-through-water look). |
 | Rain | Random droplets, so the pool is never dead still. |
 | Detail | Fineness of the water grid: finer makes smaller waves relative to the screen, at more GPU cost. Changing it stills the water. |
 | Mirror | Flip the camera horizontally — on for a mirror-facing screen, off for projection. |
@@ -48,7 +50,7 @@ the water to drop a stone in it.
 | Resonators | Level of the water made to sing. |
 | Voices | How many resonators sing at once (1-4). |
 | Clarity | Width of the resonators: low is water with a colour, high is a pure singing tone. |
-| Pitch | Snap to the scale, or glide freely with the ripple spectrum. |
+| Pitch | What picks the resonators' notes: ripple size on the scale, ripple size gliding freely, or how fast the body moves, on the scale. |
 | Scale | Scale to snap to: major or minor pentatonic, Hirajoshi, Dorian, Lydian. |
 
 ## Sound
@@ -72,6 +74,11 @@ the water is doing, measured over a 16×8 grid of zones laid over the pool.
   the scale (a note already singing keeps its place until a rival is clearly
   stronger); *Glide* lets them sit on the spectrum's peaks and slide as those
   move. The body, a hole in the water, contributes nothing where it covers.
+  *Movement speed* picks the notes from how fast the body moves instead: one
+  pitch for the whole body, from its speed weighted towards its fastest parts
+  (0.003-0.03 of a zone per frame, onto the same three octaves), and the
+  scale notes nearest it sing from the side where the movement is. Slow
+  drifting sings low, quick gestures high, stillness is silent.
 
 A GPU pass reduces the pool to those zones every frame and the numbers are
 read back asynchronously, so the sound never stalls the picture. An automatic
@@ -93,6 +100,13 @@ frame and the audio runs with large buffers, both to avoid crackle.
   stable (a lopsided coupling grows a checkerboard along the contour). As a
   source, the frame-to-frame change in the mask is injected as displacement
   just outside the body.
+- The edges of the screen are open: the outermost cells follow a one-way wave
+  equation, so waves leave instead of bouncing back. Measured with a straight
+  wavefront, a plain wall returns ~45% of it head-on; the open edge, nothing
+  measurable head-on and next to nothing at 45°. (A damping "sponge" band was
+  tried first and only added echo of its own.)
+- A mask that is one label from edge to edge counts as nobody there, whichever
+  label it is, so an empty room never turns the whole screen into body.
 - 16 wave steps per animation frame, with the mask interpolated across them so
   the body moves continuously through each camera frame. A wall that jumped
   once per frame could only radiate at the grid scale (fizz, not ripples).

@@ -9,7 +9,7 @@
 // browsers keep files for ten minutes, and a fresh main.js running against a
 // stale module from the last deploy breaks in confusing ways.
 const V = new URL(import.meta.url).search;
-const { VERT, MASK_FRAG, SPLAT_FRAG, SIM_FRAG, RENDER_FRAG, REDUCE_FRAG } = await import('./shaders.js' + V);
+const { VERT, MASK_FRAG, SPLAT_FRAG, SIM_FRAG, RENDER_FRAG, REDUCE_FRAG, TRAIL_FRAG } = await import('./shaders.js' + V);
 const {
   createGL, Program, PingPong, makeTexture, makeTarget, fullscreenQuad, bindTarget, Readback,
 } = await import('./glx.js' + V);
@@ -72,7 +72,9 @@ function setPanel(show) {
   panelBtn.textContent = show ? 'Hide' : 'Controls';
 }
 
-let gl, quad, progMask, progSplat, progSim, progRender, progReduce;
+let gl, quad, progMask, progSplat, progSim, progRender, progReduce, progTrail;
+let trail = null, trailFresh = true; // the liquid-trails picture (look 5)
+
 let statsTarget, readback;
 const audio = new WaterAudio(ZONES_X, ZONES_Y);
 let lastFrame = 0, frameDt = 1 / 60;
@@ -102,6 +104,7 @@ function initGL() {
   progSplat = new Program(gl, VERT, SPLAT_FRAG);
   progSim = new Program(gl, VERT, SIM_FRAG);
   progRender = new Program(gl, VERT, RENDER_FRAG);
+  progTrail = new Program(gl, VERT, TRAIL_FRAG);
   progReduce = new Program(gl, VERT, REDUCE_FRAG);
   statsTarget = makeTarget(gl, ZONES_X, ZONES_Y);
   readback = new Readback(gl, ZONES_X, ZONES_Y);
@@ -137,6 +140,14 @@ function resize() {
     sim = new PingPong(gl, simW, simH);
     mask = new PingPong(gl, simW, simH);
     if (demo) demo.resize(aspect);
+  }
+  // The trails picture: finer than the grid (it carries the camera's detail)
+  // but no finer than the screen.
+  const tw = Math.min(viewW, simW * 2), th = Math.min(viewH, simH * 2);
+  if (!trail || trail.w !== tw || trail.h !== th) {
+    if (trail) trail.dispose();
+    trail = new PingPong(gl, tw, th);
+    trailFresh = true;
   }
 }
 
@@ -431,6 +442,7 @@ function runMaskPass(rawTex, xform) {
     .f('uSoft', +ui.soft.value)
     // Invert corrects the segmenter's label order; the demo figure needs none.
     .i('uInvert', source === 'camera' && ui.invert.checked ? 1 : 0)
+    .i('uEmpty', source === 'camera' && segmenter.generation > 0 && segmenter.uniform ? 1 : 0)
     .i('uMirror', ui.mirror.checked ? 1 : 0)
     .v4('uCamXform', xform);
   quad.draw();
@@ -479,16 +491,39 @@ function runSimPass(step) {
   sim.swap();
 }
 
-function runRenderPass(videoTex, xform) {
+function runTrailPass(videoTex, xform) {
+  bindTarget(gl, trail.write);
+  progTrail.use()
+    .tex('uPrev', trail.read.tex)
+    .tex('uSim', sim.read.tex)
+    .tex('uMask', mask.read.tex)
+    .tex('uVideo', videoTex)
+    .v2('uTexel', 1 / simW, 1 / simH)
+    .f('uRelief', +ui.relief.value)
+    .f('uDeform', +ui.deform.value)
+    .f('uTurn', +ui.cycle.value * 0.04)
+    .f('uFresh', trailFresh ? 1 : 0)
+    .i('uMirror', ui.mirror.checked ? 1 : 0)
+    .v4('uCamXform', xform);
+  quad.draw();
+  trail.swap();
+  trailFresh = false;
+}
+
+function runRenderPass(videoTex, xform, now) {
   const p = PALETTES[ui.palette.value] || PALETTES['Sunlit blue'];
   bindTarget(gl, null, viewW, viewH);
   progRender.use()
     .tex('uSim', sim.read.tex)
     .tex('uMask', mask.read.tex)
     .tex('uVideo', videoTex)
+    .tex('uTrail', trail.read.tex)
     .v2('uTexel', 1 / simW, 1 / simH)
     .f('uRelief', +ui.relief.value)
     .f('uRefract', +ui.refract.value)
+    .f('uDeform', +ui.deform.value)
+    .f('uTime', (now / 1000) % 1000)
+    .f('uCycle', +ui.cycle.value)
     .i('uMode', +ui.look.value)
     .i('uMirror', ui.mirror.checked ? 1 : 0)
     .v4('uCamXform', xform)
@@ -516,7 +551,7 @@ function startAudio() {
   if (!ui.sound.checked) return;
   for (const k of ['volume', 'melody', 'voices', 'clarity', 'slush', 'water']) audio.set(k, +ui[k].value);
   audio.setScale(ui.scale.value);
-  audio.setSnap(ui.pitch.value === 'snap');
+  audio.setPitch(ui.pitch.value);
   audio.start();
 }
 
@@ -569,7 +604,9 @@ function step(now) {
   runMaskPass(rawTex, xform);
   if (drops.length) runSplatPass();
   for (let i = 0; i < SUBSTEPS; i++) runSimPass(i);
-  runRenderPass(videoTex, xform);
+  if (+ui.look.value === 5) runTrailPass(videoTex, xform);
+  else trailFresh = true; // start clean next time the look is picked
+  runRenderPass(videoTex, xform, now);
   if (audio.running && !readback.pending) {
     runReducePass();
     readback.request(statsTarget);
@@ -589,7 +626,7 @@ function updateStat() {
   const bits = [fps + ' fps', simW + '×' + simH];
   if (source === 'camera') {
     bits.push(segmenter.delegate ? 'mask ' + segmenter.delegate : 'mask —');
-    const cov = ui.invert.checked ? 1 - segmenter.coverage : segmenter.coverage;
+    const cov = segmenter.uniform ? 0 : ui.invert.checked ? 1 - segmenter.coverage : segmenter.coverage;
     bits.push('body ' + Math.round(cov * 100) + '%');
   } else {
     bits.push('demo silhouette');
@@ -608,7 +645,8 @@ function note(msg) {
 const ui = {};
 for (const id of ['obstacle', 'ripples', 'look', 'palette', 'speed', 'damp', 'push',
   'relief', 'refract', 'rain', 'mirror', 'invert', 'soft', 'ease', 'showmask',
-  'sound', 'volume', 'melody', 'voices', 'clarity', 'slush', 'water', 'pitch', 'scale', 'detail', 'framing']) {
+  'sound', 'volume', 'melody', 'voices', 'clarity', 'slush', 'water', 'pitch', 'scale', 'detail', 'framing',
+  'deform', 'cycle']) {
   ui[id] = el(id);
 }
 
@@ -635,9 +673,8 @@ for (const k of ['volume', 'melody', 'voices', 'clarity', 'slush', 'water']) {
 }
 ui.scale.addEventListener('change', () => audio.setScale(ui.scale.value));
 ui.pitch.addEventListener('change', () => {
-  const snap = ui.pitch.value === 'snap';
-  audio.setSnap(snap);
-  ui.scale.disabled = !snap; // a free glide has no scale
+  audio.setPitch(ui.pitch.value);
+  ui.scale.disabled = ui.pitch.value === 'glide'; // a free glide has no scale
 });
 
 // The frame loop stops in a hidden tab; stop the sound with it rather than
