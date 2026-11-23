@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Water Contour</title>
-<link rel="stylesheet" href="style.css?v=20261123135441">
+<link rel="stylesheet" href="style.css?v=20261123152202">
 </head>
 <body>
 <canvas id="stage"></canvas>
@@ -33,8 +33,8 @@
     <label class="sel">Look
       <select id="look">
         <option value="0">Water only &mdash; person as void</option>
-        <option value="1" selected>Camera seen through the water</option>
-        <option value="2">Rippled camera &mdash; colour fringes</option>
+        <option value="1">Camera seen through the water</option>
+        <option value="2" selected>Rippled camera &mdash; colour fringes</option>
         <optgroup label="Colour over the rippled camera">
           <option value="3">Oil slick</option>
           <option value="4">Neon contours</option>
@@ -57,7 +57,7 @@
         <option value="midday">Midday</option>
       </select>
     </label>
-    <label class="sl" data-looks="2 3 4 5 6 7 8 9 10">Deform <input type="range" id="deform" min="0" max="3" step="0.05" value="1"></label>
+    <label class="sl" data-looks="2 3 4 5 6 7 8 9 10">Deform <input type="range" id="deform" min="0" max="3" step="0.05" value="0.85"></label>
     <label class="sl" data-looks="3 4 5 6 7 8 9 10">Effect <input type="range" id="fx" min="0" max="2" step="0.05" value="1"></label>
     <label class="sl" data-looks="3 4 5 6 7 8 9">Color cycle <input type="range" id="cycle" min="0" max="1.5" step="0.01" value="0.3"></label>
     <label class="sl" data-looks="8">Grating <input type="range" id="grating" min="5" max="120" step="1" value="25"></label>
@@ -97,15 +97,15 @@
     <label><input type="checkbox" id="sound" checked> Sound <span class="sub">the water, made to sing</span></label>
     <label class="sl">Volume <input type="range" id="volume" min="0" max="1" step="0.01" value="0.7"></label>
     <label class="sl">Water <input type="range" id="water" min="0" max="1" step="0.01" value="0.45"></label>
-    <label class="sl">Slush <input type="range" id="slush" min="0" max="1" step="0.01" value="0.22"></label>
-    <label class="sl">Resonators <input type="range" id="melody" min="0" max="1" step="0.01" value="0.16"></label>
-    <label class="sl">Voices <input type="range" id="voices" min="1" max="4" step="1" value="3"></label>
-    <label class="sl">Clarity <input type="range" id="clarity" min="8" max="150" step="1" value="150"></label>
+    <label class="sl">Slush <input type="range" id="slush" min="0" max="1" step="0.01" value="0.69"></label>
+    <label class="sl">Resonators <input type="range" id="melody" min="0" max="1" step="0.01" value="0.19"></label>
+    <label class="sl">Voices <input type="range" id="voices" min="1" max="4" step="1" value="1"></label>
+    <label class="sl">Clarity <input type="range" id="clarity" min="8" max="150" step="1" value="127"></label>
     <label class="sel">Pitch
       <select id="pitch">
         <option value="snap">Ripple size, on the scale</option>
         <option value="glide">Ripple size, gliding</option>
-        <option value="speed">Movement speed, on the scale</option>
+        <option value="speed" selected>Movement speed, on the scale</option>
       </select>
     </label>
     <label class="sel">Scale
@@ -124,6 +124,6 @@
 <button id="btn-panel" class="ghost small" hidden>Controls</button>
 <div id="toast" role="status" hidden></div>
 
-<script type="module" src="src/main.js?v=20261123135441"></script>
+<script type="module" src="src/main.js?v=20261123152202"></script>
 </body>
 </html>
