@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Water Contour</title>
-<link rel="stylesheet" href="style.css?v=20261123101735">
+<link rel="stylesheet" href="style.css?v=20261123104909">
 </head>
 <body>
 <canvas id="stage"></canvas>
@@ -40,11 +40,29 @@
         <option value="5">Liquid trails</option>
         <option value="6">Thermal camera</option>
         <option value="7">Caustic light</option>
+        <option value="8">Diffraction &mdash; ripples as a rainbow grating</option>
+        <option value="9">Sky reflection</option>
+        <option value="10">Clear water &mdash; depth and light</option>
       </select>
     </label>
-    <label class="sl">Deform <input type="range" id="deform" min="0" max="3" step="0.05" value="1"></label>
-    <label class="sl">Color cycle <input type="range" id="cycle" min="0" max="1.5" step="0.01" value="0.3"></label>
-    <label class="sel">Palette
+    <label class="sel" data-looks="9">Sky
+      <select id="sky">
+        <option value="sunset">Sunset</option>
+        <option value="aurora">Aurora</option>
+        <option value="neon">Neon dusk</option>
+        <option value="midday">Midday</option>
+      </select>
+    </label>
+    <label class="sl" data-looks="2 3 4 5 6 7 8 9 10">Deform <input type="range" id="deform" min="0" max="3" step="0.05" value="1"></label>
+    <label class="sl" data-looks="3 4 5 6 7 8 9">Color cycle <input type="range" id="cycle" min="0" max="1.5" step="0.01" value="0.3"></label>
+    <label class="sl" data-looks="8">Grating <input type="range" id="grating" min="5" max="120" step="1" value="25"></label>
+    <label class="sl" data-looks="8">Iridescence <input type="range" id="irid" min="0" max="3" step="0.05" value="1.3"></label>
+    <label class="sl" data-looks="8 9">Light from <input type="range" id="lightaz" min="0" max="360" step="1" value="40"></label>
+    <label class="sl" data-looks="9">Sun height <input type="range" id="sunh" min="0" max="1" step="0.01" value="0.12"></label>
+    <label class="sl" data-looks="9">Reflection <input type="range" id="reflect" min="0" max="1" step="0.01" value="0.8"></label>
+    <label class="sl" data-looks="10">Depth <input type="range" id="depth" min="0.1" max="3" step="0.05" value="0.9"></label>
+    <label class="sl" data-looks="10">Caustics <input type="range" id="causticamt" min="0" max="3" step="0.05" value="1"></label>
+    <label class="sel" data-looks="0 1 7">Palette
       <select id="palette"></select>
     </label>
   </div>
@@ -54,7 +72,7 @@
     <label class="sl">Wave life <input type="range" id="damp" min="0.9" max="0.999" step="0.001" value="0.92"></label>
     <label class="sl">Ripple push <input type="range" id="push" min="0" max="6" step="0.1" value="0.6"></label>
     <label class="sl">Relief <input type="range" id="relief" min="0.2" max="4" step="0.05" value="1"></label>
-    <label class="sl">Refraction <input type="range" id="refract" min="0" max="0.2" step="0.005" value="0"></label>
+    <label class="sl" data-looks="1">Refraction <input type="range" id="refract" min="0" max="0.2" step="0.005" value="0"></label>
     <label class="sl">Rain <input type="range" id="rain" min="0" max="1" step="0.02" value="0"></label>
     <label class="sl">Detail <input type="range" id="detail" min="0.4" max="2.5" step="0.1" value="1"></label>
   </div>
@@ -103,6 +121,6 @@
 <button id="btn-panel" class="ghost small" hidden>Controls</button>
 <div id="toast" role="status" hidden></div>
 
-<script type="module" src="src/main.js?v=20261123101735"></script>
+<script type="module" src="src/main.js?v=20261123104909"></script>
 </body>
 </html>

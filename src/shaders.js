@@ -233,11 +233,66 @@ vec3 hueTurn(vec3 c, float a) {
   return c * ca + cross(k, c) * sa + k * dot(k, c) * (1.0 - ca);
 }`;
 
+// Light and colour from nature, for the last three looks.
+const NATURAL = `
+// The colour of a single wavelength of light (nm), after Alan Zucconi's
+// six-bump fit to the CIE curves; black outside the visible range.
+vec3 bump3y(vec3 x, vec3 yoffset) {
+  vec3 y = vec3(1.0) - x * x;
+  return clamp(y - yoffset, 0.0, 1.0);
+}
+vec3 spectral(float nm) {
+  float x = clamp((nm - 400.0) / 300.0, 0.0, 1.0);
+  const vec3 c1 = vec3(3.54585104, 2.93225262, 2.41593945);
+  const vec3 x1 = vec3(0.69549072, 0.49228336, 0.27699880);
+  const vec3 y1 = vec3(0.02312639, 0.15225084, 0.52607955);
+  const vec3 c2 = vec3(3.90307140, 3.21182957, 3.96587128);
+  const vec3 x2 = vec3(0.11748627, 0.86755042, 0.66077860);
+  const vec3 y2 = vec3(0.84897130, 0.88445281, 0.73949448);
+  float seen = smoothstep(380.0, 410.0, nm) * (1.0 - smoothstep(690.0, 730.0, nm));
+  return (bump3y(c1 * (x - x1), y1) + bump3y(c2 * (x - x2), y2)) * seen;
+}
+
+// A sky dome, seen along direction r (z up). sunDir is where the sun is,
+// sunH (0..1) how high, which also turns a sunset into day.
+// Skies: 0 sunset, 1 aurora, 2 neon dusk, 3 midday.
+vec3 skyColor(vec3 r, vec3 sunDir, float sunH, int sky, float time) {
+  float t = clamp(r.z, 0.0, 1.0);                 // 0 at the horizon, 1 overhead
+  float az = atan(r.y, r.x);
+  float toSun = max(dot(r, sunDir), 0.0);
+  vec3 c;
+  if (sky == 1) {
+    // Night, and curtains of light folding along the horizon.
+    c = mix(vec3(0.03, 0.06, 0.10), vec3(0.01, 0.015, 0.05), t);
+    float fold = sin(az * 3.0 + time * 0.15 + sin(az * 7.0 + time * 0.1) * 0.8);
+    float curtain = smoothstep(0.2, 1.0, fold) * smoothstep(0.03, 0.25, t) * (1.0 - smoothstep(0.45, 0.9, t));
+    c += mix(vec3(0.1, 1.0, 0.55), vec3(0.65, 0.25, 1.0), smoothstep(0.1, 0.6, t)) * curtain * 1.4;
+    c += vec3(0.9, 0.95, 1.0) * step(0.9985, fract(sin(dot(floor(r.xy * 220.0), vec2(12.9898, 78.233))) * 43758.5453)) * t;
+  } else if (sky == 2) {
+    // Neon dusk: violet overhead, hot pink at the horizon, a big low sun.
+    c = mix(vec3(1.0, 0.18, 0.55), vec3(0.42, 0.08, 0.68), smoothstep(0.0, 0.35, t));
+    c = mix(c, vec3(0.05, 0.02, 0.22), smoothstep(0.3, 1.0, t));
+    c += mix(vec3(1.0, 0.85, 0.2), vec3(1.0, 0.3, 0.6), 1.0 - toSun) * pow(toSun, 30.0) * 1.5;
+  } else {
+    float day = sky == 3 ? 1.0 : sunH;
+    vec3 horizon = mix(vec3(1.0, 0.45, 0.15), vec3(0.75, 0.86, 1.0), day);
+    vec3 middle  = mix(vec3(0.85, 0.30, 0.45), vec3(0.45, 0.66, 0.96), day);
+    vec3 zenith  = mix(vec3(0.10, 0.08, 0.30), vec3(0.14, 0.36, 0.85), day);
+    c = mix(horizon, middle, smoothstep(0.0, 0.35, t));
+    c = mix(c, zenith, smoothstep(0.3, 1.0, t));
+    c += mix(vec3(1.0, 0.5, 0.2), vec3(1.0, 0.95, 0.85), day) * pow(toSun, 8.0) * 0.8; // glow
+  }
+  c += vec3(1.0, 0.95, 0.85) * smoothstep(0.9990, 0.9997, toSun) * 6.0;               // sun
+  return c;
+}`;
+
 // Shades the height field. Looks:
-//   0 water only, person as void       4 neon contours
-//   1 camera seen through the water    5 liquid trails (the picture smeared by the water)
-//   2 rippled camera, colour fringes   6 thermal camera
-//   3 oil slick                        7 caustic light
+//   0 water only, person as void       6 thermal camera
+//   1 camera seen through the water    7 caustic light
+//   2 rippled camera, colour fringes   8 diffraction: ripples as a rainbow grating
+//   3 oil slick                        9 sky reflection
+//   4 neon contours                   10 clear water: depth and light
+//   5 liquid trails (the picture smeared by the water)
 export const RENDER_FRAG = `#version 300 es
 precision highp float;
 in vec2 vUv;
@@ -255,8 +310,18 @@ uniform float uTime;        // seconds
 uniform float uCycle;       // how fast the psychedelic looks drift through colour
 uniform int uMode;
 uniform vec3 uDeep, uShallow, uSpec, uVoid, uRim;
+uniform sampler2D uGrate;   // ripple structure (look 8), see GRATE_FRAG
+uniform float uGrating;     // nm of light per cell of ripple spacing (look 8)
+uniform float uIrid;        // strength of the diffraction colours (look 8)
+uniform float uLightAz;     // direction the light comes from, radians (looks 8, 9)
+uniform int uSky;           // which sky (look 9)
+uniform float uSunH;        // sun height, 0..1 (look 9)
+uniform float uReflect;     // how much sky the water reflects (look 9)
+uniform float uDepth;       // depth of the water (look 10)
+uniform float uCaustics;    // strength of the caustics (look 10)
 ${CAM_UV}
 ${COLOR}
+${NATURAL}
 
 // The camera picture at uv, with a margin colour past its edges.
 vec3 picture(vec2 uv, vec3 margin) {
@@ -356,6 +421,62 @@ void main() {
     vec3 lit = 0.5 + tint * light * 2.2;
     col = picture(vUv + bend * 0.6, uDeep * 0.6) * lit + uSpec * spec * 0.5;
     col = mix(col, picture(vUv, uDeep * 0.6) * (0.55 + light * 0.8), body);
+  } else if (uMode == 8) {
+    // Diffraction: the ripples as a grating, like the grooves of a CD. Their
+    // spacing sets the colour (wider spacing, longer wavelength), their
+    // direction against the light sweeps it through the rainbow, and only
+    // orderly ripple trains shine; churned water stays dark and silvery.
+    // Real ripples are about a thousand times too coarse for this; here they
+    // are read as if they were fine enough.
+    vec2 q = uTexel * 2.5;
+    vec4 g = (texture(uGrate, vUv) * 2.0 + texture(uGrate, vUv + q) + texture(uGrate, vUv - q)
+            + texture(uGrate, vUv + vec2(q.x, -q.y)) + texture(uGrate, vUv + vec2(-q.x, q.y))) / 6.0;
+    float energy = g.y + g.z;                              // mean squared slope (scaled)
+    float k = sqrt(max(g.x, 1e-9) / max(energy, 1e-9) * (25.0 / 400.0)); // ripple wavenumber, rad per cell
+    float spacing = 6.28318 / max(k, 1e-3);                // cells between crests
+    float across = 0.5 * atan(2.0 * g.w, g.y - g.z + 1e-9); // direction across the crests (defined on still water too)
+    float order = sqrt((g.y - g.z) * (g.y - g.z) + 4.0 * g.w * g.w) / max(energy, 1e-9); // 1: one clean direction
+    float light = uLightAz + hue * 0.5;
+    float nm = spacing * uGrating * abs(cos(across - light));
+    // First three orders: wide ripples, too coarse to colour the first order,
+    // still colour the second and third, as on a real grating.
+    vec3 rainbowLight = spectral(nm) + spectral(nm / 2.0) * 0.6 + spectral(nm / 3.0) * 0.4;
+    float shine = order * order * smoothstep(0.0005, 0.015, energy) * uIrid;
+    vec3 under = uDeep * 0.35 + picture(vUv + bend * 0.4, vec3(0.0)) * 0.18;
+    col = under + rainbowLight * shine * 1.5 + uSpec * spec * 0.5;
+    col = mix(col, picture(vUv, vec3(0.0)) * 0.6 + rainbowLight * shine * 0.3, body);
+  } else if (uMode == 9) {
+    // Sky reflection: each facet of the water mirrors its own patch of sky.
+    // Flat water sees overhead; tilted facets look towards the horizon, so the
+    // waves carry the sky's whole range of colour.
+    vec3 r = reflect(vec3(0.0, 0.0, -1.0), n);
+    float sunEl = mix(0.03, 1.25, uSunH);
+    float sunAz = uLightAz + hue * 0.3;
+    vec3 sunDir = vec3(cos(sunEl) * cos(sunAz), cos(sunEl) * sin(sunAz), sin(sunEl));
+    vec3 sky = skyColor(r, sunDir, uSunH, uSky, uTime);
+    vec3 ambient = 0.5 * (skyColor(vec3(0.0, 0.0, 1.0), sunDir, uSunH, uSky, uTime)
+                        + skyColor(normalize(vec3(cos(sunAz), sin(sunAz), 0.15)), sunDir, uSunH, uSky, uTime));
+    float mirror = uReflect * mix(0.6, 1.0, sqrt(1.0 - n.z));
+    vec3 under = picture(vUv + bend * 0.4, uDeep * 0.5) * (0.15 + ambient * 0.35);
+    col = mix(under, sky, clamp(mirror, 0.0, 1.0));
+    col = mix(col, picture(vUv, uDeep * 0.5) * (0.35 + ambient * 0.9), body);
+  } else if (uMode == 10) {
+    // Clear water: looking down through it at the picture as the floor. Water
+    // soaks up red first, then green, so the deeper the water (troughs deeper
+    // than crests) the bluer the floor; it also bends blue a little more than
+    // red, and the waves focus sunlight into caustics, each colour slightly
+    // apart. Light scattered by the water itself gives it its own glow.
+    float d = max(0.05, uDepth * (1.0 - h * 1.5 * uRelief));
+    vec3 through = exp(-vec3(0.65, 0.18, 0.08) * d * 2.0);       // down and back up
+    vec3 sand = vec3(0.76, 0.70, 0.55) * 0.6;
+    vec3 floor_ = vec3(picture(vUv + bend * 0.9, sand).r, picture(vUv + bend, sand).g, picture(vUv + bend * 1.12, sand).b);
+    vec2 disp = normalize(slope + vec2(1e-6)) * uTexel * 1.5;
+    vec3 focus = clamp(-vec3(curvAt(vUv - disp, t), curvAt(vUv, t), curvAt(vUv + disp, t)) * uRelief * 18.0, 0.0, 3.0) * uCaustics;
+    col = floor_ * through * (0.55 + focus * 1.5) * vec3(1.0, 0.97, 0.9);
+    col += (1.0 - through) * vec3(0.0, 0.10, 0.14);               // the water's own glow
+    float F = 0.02 + 0.98 * pow(1.0 - n.z, 5.0);
+    col = mix(col, vec3(0.55, 0.70, 0.90), F * 0.8) + vec3(1.0) * spec * 0.8;
+    col = mix(col, picture(vUv, sand) * (0.6 + focus * 0.5), body);
   } else {
     // Rest height sits near the deep end so that crests, not the flat pool,
     // carry the light.
@@ -373,7 +494,7 @@ void main() {
   float mD = texture(uMask, vUv - vec2(0.0, t.y)).r;
   float mU = texture(uMask, vUv + vec2(0.0, t.y)).r;
   float grad = length(vec2(mR - mL, mU - mD));
-  vec3 rim = (uMode >= 2 && uMode != 7) ? rainbow(hue * 0.5 + vUv.y) : uRim;
+  vec3 rim = (uMode >= 2 && uMode <= 6) ? rainbow(hue * 0.5 + vUv.y) : uRim;
   col += rim * smoothstep(0.10, 0.60, grad) * 0.22;
 
   outColor = vec4(col, 1.0);
@@ -383,6 +504,31 @@ void main() {
 // along the slope of the water, slowly turning through the colours, and fed
 // fresh camera picture — strongly where the body is, faintly everywhere else —
 // so movement leaves smeared, rainbowing wakes.
+// Ripple structure, per cell, for the diffraction look: squared curvature and
+// the slope's structure tensor. Averaged over a small patch (in the render
+// pass) these give the ripples' spacing — for a regular ripple train,
+// curvature^2 / slope^2 is exactly the squared wavenumber — their direction,
+// and how orderly they are. Scaled to keep clear of half-float underflow:
+// curvature by 20, slope by 5.
+export const GRATE_FRAG = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 outColor;
+
+uniform sampler2D uSim;
+uniform vec2 uTexel;
+
+void main() {
+  float h  = texture(uSim, vUv).r;
+  float hL = texture(uSim, vUv - vec2(uTexel.x, 0.0)).r;
+  float hR = texture(uSim, vUv + vec2(uTexel.x, 0.0)).r;
+  float hD = texture(uSim, vUv - vec2(0.0, uTexel.y)).r;
+  float hU = texture(uSim, vUv + vec2(0.0, uTexel.y)).r;
+  float curv = (hL + hR + hD + hU - 4.0 * h) * 20.0;
+  vec2 g = vec2(hR - hL, hU - hD) * 0.5 * 5.0;
+  outColor = vec4(curv * curv, g.x * g.x, g.y * g.y, g.x * g.y);
+}`;
+
 export const TRAIL_FRAG = `#version 300 es
 precision highp float;
 in vec2 vUv;

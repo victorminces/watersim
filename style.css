@@ -237,3 +237,6 @@ video.feed {
 
 #toast[hidden] { display: none; }
 #toast.actionable { cursor: pointer; border-color: var(--accent); }
+
+/* Controls that do nothing in the current look are hidden (see data-looks). */
+#panel [data-looks][hidden] { display: none; }

@@ -26,9 +26,17 @@ the water to drop a stone in it.
 | --- | --- |
 | Solid obstacle | The silhouette is a wall: waves reflect off the contour and cannot cross it. |
 | Motion ripples | A moving contour shoves the water, so the body radiates waves as it moves. |
-| Look | Water only (body is an empty void) · Camera seen through the water · Rippled camera (the water bends the picture, each colour differently) · Oil slick (an iridescent film on the waves) · Neon contours (lines of equal height, each its own colour) · Liquid trails (the picture smeared along by the waves and drifting through colour) · Thermal camera (brightness as false-colour heat) · Caustic light (rainbow-fringed threads of focused light, over the picture too). |
+| Look | Water only (body is an empty void) · Camera seen through the water · Rippled camera (the water bends the picture, each colour differently) · Oil slick (an iridescent film on the waves) · Neon contours (lines of equal height, each its own colour) · Liquid trails (the picture smeared along by the waves and drifting through colour) · Thermal camera (brightness as false-colour heat) · Caustic light (rainbow-fringed threads of focused light, over the picture too) · Diffraction (the ripples as a rainbow grating) · Sky reflection (each wave facet mirrors its own patch of sky) · Clear water (looking down through real water at the picture as the floor). Each look shows only the sliders that apply to it. |
 | Deform | How hard the water bends the picture in the rippled, oil, neon, trails, thermal and caustic looks. |
 | Color cycle | How fast the psychedelic looks drift through colour. |
+| Grating | Diffraction: how ripple spacing maps to colour (nm of light per cell of spacing). |
+| Iridescence | Diffraction: strength of the colours. |
+| Light from | Diffraction and sky reflection: the direction the light (or sun) comes from. Color cycle circles it slowly. |
+| Sky | Sky reflection: sunset, aurora, neon dusk or midday. |
+| Sun height | Sky reflection: from a sun on the horizon (sunset colours) to high (daylight). |
+| Reflection | Sky reflection: how much sky the water mirrors. |
+| Depth | Clear water: how deep the water is (deeper is bluer). |
+| Caustics | Clear water: strength of the focused sunlight. |
 | Palette | Colour scheme, switchable live. |
 | Wave speed | Propagation speed (c², capped at 0.45 for stability). |
 | Wave life | How long waves survive before damping out. |
@@ -52,6 +60,29 @@ the water to drop a stone in it.
 | Clarity | Width of the resonators: low is water with a colour, high is a pure singing tone. |
 | Pitch | What picks the resonators' notes: ripple size on the scale, ripple size gliding freely, or how fast the body moves, on the scale. |
 | Scale | Scale to snap to: major or minor pentatonic, Hirajoshi, Dorian, Lydian. |
+
+## Natural colour
+
+Three looks take their colour from how real light meets water, steered by the
+shape of the surface rather than painted on:
+
+- **Diffraction.** The ripples are read as a grating, like the grooves of a CD.
+  A small pass computes, per cell, the curvature and the slope's structure
+  tensor; averaged over a patch these give the ripples' spacing (for a regular
+  ripple train, curvature² / slope² is exactly the squared wavenumber), their
+  direction, and how orderly they are. Spacing × the angle to the light sets
+  the wavelength of the first three diffraction orders (a fitted CIE spectrum
+  turns those into colour); order sets the brightness, so only regular ripple
+  trains shine. Real ripples are about a thousand times too coarse to do this —
+  here they are read as if they were fine enough.
+- **Sky reflection.** Real water gets most of its colour from the sky it
+  mirrors. Each facet reflects the direction its normal sends the view; flat
+  water sees overhead, tilted facets the horizon, so crests catch a sunset's
+  orange while flat water stays indigo.
+- **Clear water.** Water absorbs red first, then green; troughs are deeper than
+  crests, so they are bluer. It bends blue slightly more than red, and focuses
+  sunlight into caustics, each colour a little apart. Light scattered in the
+  water gives it its own blue-green glow.
 
 ## Sound
 

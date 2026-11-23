@@ -9,7 +9,7 @@
 // browsers keep files for ten minutes, and a fresh main.js running against a
 // stale module from the last deploy breaks in confusing ways.
 const V = new URL(import.meta.url).search;
-const { VERT, MASK_FRAG, SPLAT_FRAG, SIM_FRAG, RENDER_FRAG, REDUCE_FRAG, TRAIL_FRAG } = await import('./shaders.js' + V);
+const { VERT, MASK_FRAG, SPLAT_FRAG, SIM_FRAG, RENDER_FRAG, REDUCE_FRAG, TRAIL_FRAG, GRATE_FRAG } = await import('./shaders.js' + V);
 const {
   createGL, Program, PingPong, makeTexture, makeTarget, fullscreenQuad, bindTarget, Readback,
 } = await import('./glx.js' + V);
@@ -74,6 +74,7 @@ function setPanel(show) {
 
 let gl, quad, progMask, progSplat, progSim, progRender, progReduce, progTrail;
 let trail = null, trailFresh = true; // the liquid-trails picture (look 5)
+let progGrate, grate = null;          // ripple structure for diffraction (look 8)
 
 let statsTarget, readback;
 const audio = new WaterAudio(ZONES_X, ZONES_Y);
@@ -105,6 +106,7 @@ function initGL() {
   progSim = new Program(gl, VERT, SIM_FRAG);
   progRender = new Program(gl, VERT, RENDER_FRAG);
   progTrail = new Program(gl, VERT, TRAIL_FRAG);
+  progGrate = new Program(gl, VERT, GRATE_FRAG);
   progReduce = new Program(gl, VERT, REDUCE_FRAG);
   statsTarget = makeTarget(gl, ZONES_X, ZONES_Y);
   readback = new Readback(gl, ZONES_X, ZONES_Y);
@@ -139,6 +141,8 @@ function resize() {
     if (mask) mask.dispose();
     sim = new PingPong(gl, simW, simH);
     mask = new PingPong(gl, simW, simH);
+    if (grate) { gl.deleteTexture(grate.tex); gl.deleteFramebuffer(grate.fbo); }
+    grate = makeTarget(gl, simW, simH);
     if (demo) demo.resize(aspect);
   }
   // The trails picture: finer than the grid (it carries the camera's detail)
@@ -510,6 +514,16 @@ function runTrailPass(videoTex, xform) {
   trailFresh = false;
 }
 
+function runGratePass() {
+  bindTarget(gl, grate);
+  progGrate.use()
+    .tex('uSim', sim.read.tex)
+    .v2('uTexel', 1 / simW, 1 / simH);
+  quad.draw();
+}
+
+const SKIES = { sunset: 0, aurora: 1, neon: 2, midday: 3 };
+
 function runRenderPass(videoTex, xform, now) {
   const p = PALETTES[ui.palette.value] || PALETTES['Sunlit blue'];
   bindTarget(gl, null, viewW, viewH);
@@ -518,6 +532,15 @@ function runRenderPass(videoTex, xform, now) {
     .tex('uMask', mask.read.tex)
     .tex('uVideo', videoTex)
     .tex('uTrail', trail.read.tex)
+    .tex('uGrate', grate.tex)
+    .f('uGrating', +ui.grating.value)
+    .f('uIrid', +ui.irid.value)
+    .f('uLightAz', +ui.lightaz.value * Math.PI / 180)
+    .i('uSky', SKIES[ui.sky.value] ?? 0)
+    .f('uSunH', +ui.sunh.value)
+    .f('uReflect', +ui.reflect.value)
+    .f('uDepth', +ui.depth.value)
+    .f('uCaustics', +ui.causticamt.value)
     .v2('uTexel', 1 / simW, 1 / simH)
     .f('uRelief', +ui.relief.value)
     .f('uRefract', +ui.refract.value)
@@ -605,6 +628,7 @@ function step(now) {
   if (drops.length) runSplatPass();
   for (let i = 0; i < SUBSTEPS; i++) runSimPass(i);
   if (+ui.look.value === 5) runTrailPass(videoTex, xform);
+  if (+ui.look.value === 8) runGratePass();
   else trailFresh = true; // start clean next time the look is picked
   runRenderPass(videoTex, xform, now);
   if (audio.running && !readback.pending) {
@@ -646,7 +670,7 @@ const ui = {};
 for (const id of ['obstacle', 'ripples', 'look', 'palette', 'speed', 'damp', 'push',
   'relief', 'refract', 'rain', 'mirror', 'invert', 'soft', 'ease', 'showmask',
   'sound', 'volume', 'melody', 'voices', 'clarity', 'slush', 'water', 'pitch', 'scale', 'detail', 'framing',
-  'deform', 'cycle']) {
+  'deform', 'cycle', 'grating', 'irid', 'lightaz', 'sky', 'sunh', 'reflect', 'depth', 'causticamt']) {
   ui[id] = el(id);
 }
 
@@ -683,6 +707,17 @@ document.addEventListener('visibilitychange', () => {
   if (!audio.ctx) return;
   audio.setEnabled(!document.hidden && ui.sound.checked);
 });
+
+// Each look shows only the sliders that do something in it: a control row
+// with data-looks="2 3 4" appears for those looks and hides for the rest.
+function showLookControls() {
+  const look = ui.look.value;
+  for (const row of panel.querySelectorAll('[data-looks]')) {
+    row.hidden = !row.dataset.looks.split(' ').includes(look);
+  }
+}
+ui.look.addEventListener('change', showLookControls);
+showLookControls();
 
 ui.showmask.addEventListener('change', () => {
   maskview.hidden = !ui.showmask.checked;
