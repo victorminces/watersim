@@ -22,41 +22,69 @@ camera** to drive the water with a procedural stand-in silhouette.
 `H` hides the panel · `F` fullscreen · `M` mutes · `C` calms the water · click or drag on
 the water to drop a stone in it.
 
+The panel is in five sections, and it shows only the controls that do
+something with the current settings: each look its own sliders, the sky
+reflection those of its sky, Ripple push only while Motion ripples is on, the
+sound's controls only while Sound is on, Scale only when the pitch snaps to
+it, and the camera's framing, mask inversion and preview only with a camera.
+
+**Body** — how the silhouette touches the water.
+
 | Control | What it does |
 | --- | --- |
 | Solid obstacle | The silhouette is a wall: waves reflect off the contour and cannot cross it. |
 | Motion ripples | A moving contour shoves the water, so the body radiates waves as it moves. |
-| Look | Water only (body is an empty void) · Camera seen through the water · Rippled camera (the water bends the picture, each colour differently) · Oil slick (an iridescent film on the waves) · Neon contours (lines of equal height, each its own colour) · Liquid trails (the picture smeared along by the waves and drifting through colour) · Thermal camera (brightness as false-colour heat) · Caustic light (rainbow-fringed threads of focused light, over the picture too) · Diffraction (the ripples as a rainbow grating) · Sky reflection (each wave facet mirrors its own patch of sky) · Clear water (looking down through real water at the picture as the floor). From Oil slick on, each look is a colour effect laid over the rippled camera, so the picture keeps its own colours where the water is calm. Each look shows only the sliders that apply to it. |
-| Deform | How hard the water bends the picture beneath it. |
-| Effect | How strongly the look's colour is laid over the rippled camera: 0 is the plain rippled camera. |
-| Color cycle | How fast the psychedelic looks drift through colour. |
-| Grating | Diffraction: how ripple spacing maps to colour (nm of light per cell of spacing). |
-| Light from | Diffraction and sky reflection: the direction the light (or sun) comes from. Color cycle circles it slowly. |
+| Ripple push | How hard contour motion drives the water. |
+
+**Look**
+
+| Control | What it does |
+| --- | --- |
+| Look | Water only (body is an empty void) · Camera seen through the water · Rippled camera (the water bends the picture, each colour differently) · Oil slick (an iridescent film on the waves) · Neon contours (lines of equal height, each its own colour) · Liquid trails (the picture smeared along by the waves and drifting through colour) · Thermal camera (brightness as false-colour heat) · Caustic light (rainbow-fringed threads of focused light, over the picture too) · Diffraction (the ripples as a rainbow grating) · Sky reflection (each wave facet mirrors its own patch of sky) · Clear water (looking down through real water at the picture as the floor). From Oil slick on, each look is a colour effect laid over the rippled camera, so the picture keeps its own colours where the water is calm. |
 | Sky | Sky reflection: sunset, aurora, neon dusk or midday. |
-| Sun height | Sky reflection: from a sun on the horizon (sunset colours) to high (daylight). |
+| Palette | Water only, camera through the water, caustic light: the colour scheme. |
+| Refraction | Camera through the water: how much the waves bend the picture. |
+| Deform | How hard the water bends the picture beneath it. |
+| Effect | How strongly the look's colour is laid over the rippled camera: 0 is the plain rippled camera. Past 1, Liquid trails last longer and Clear water is exaggerated (bluer depths, brighter caustics). |
+| Color cycle | How fast the psychedelic looks drift through colour; in diffraction and sky reflection, how fast the light circles. |
+| Grating | Diffraction: how ripple spacing maps to colour (nm of light per cell of spacing). |
+| Light from | Diffraction and sky reflection: the direction the light (or sun) comes from. |
+| Sun height | Sky reflection: from a sun on the horizon (sunset colours) to high (daylight). Not in the aurora's night sky. |
 | Clouds | Sky reflection: how much of the sunset or midday sky is cloud, from clear to overcast. |
 | Depth | Clear water: how deep the water is (deeper is bluer). |
 | Caustics | Clear water: strength of the focused sunlight. |
-| Palette | Colour scheme, switchable live. |
+| Relief | Vertical exaggeration: how steep the waves look, so how strongly they shade, bend and colour every look. |
+
+**Water**
+
+| Control | What it does |
+| --- | --- |
 | Wave speed | Propagation speed (c², capped at 0.45 for stability). |
 | Wave life | How long waves survive before damping out. |
-| Ripple push | How hard contour motion drives the water. |
-| Relief | Vertical exaggeration — contrast of the shading. |
-| Refraction | Bend of the camera image under the waves (the camera-through-water look). |
 | Rain | Random droplets, so the pool is never dead still. |
 | Detail | Fineness of the water grid: finer makes smaller waves relative to the screen, at more GPU cost. Changing it stills the water. |
+
+**Camera**
+
+| Control | What it does |
+| --- | --- |
 | Mirror | Flip the camera horizontally — on for a mirror-facing screen, off for projection. |
 | Framing | Fill the screen (crops what does not fit — on a tall phone, the sides of the picture), or show the whole picture with water-only margins. |
 | Invert mask | Swap body and water. Set automatically on the first frames with someone in them (the top corners of the picture are taken to be background), unless you change it by hand. |
 | Edge softness | How much the contour is smoothed each frame (0–1). |
 | Mask easing | Temporal smoothing of the mask: low is calm but laggy, high is responsive but jittery. |
 | Show mask preview | Thumbnail of what the segmenter sees. |
+
+**Sound**
+
+| Control | What it does |
+| --- | --- |
 | Sound | Sound on or off. |
 | Volume | Overall level. |
 | Water | Level of the water wash. |
 | Slush | How much the water surges and opens up on its peaks (the resonators surge with it). |
 | Resonators | Level of the water made to sing. |
-| Voices | How many resonators sing at once (1-4). |
+| Voices | How many resonators sing at once (1-4). Following movement speed, the chord built on the speed's note: each voice adds every other scale note above it, each quieter. |
 | Clarity | Width of the resonators: low is water with a colour, high is a pure singing tone. |
 | Pitch | What picks the resonators' notes: ripple size on the scale, ripple size gliding freely, or how fast the body moves, on the scale. |
 | Scale | Scale to snap to: major or minor pentatonic, Hirajoshi, Dorian, Lydian. |

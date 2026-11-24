@@ -338,7 +338,7 @@ vec3 skyColor(vec3 r, vec3 sunDir, float sunH, int sky, float time, float cloudy
       c = mix(c, mix(dusk, noon, smoothstep(0.15, 0.6, day)), amount);
     }
   }
-  c += vec3(1.0, 0.95, 0.85) * smoothstep(0.9990, 0.9997, toSun) * 6.0;               // sun
+  if (sky != 1) c += vec3(1.0, 0.95, 0.85) * smoothstep(0.9990, 0.9997, toSun) * 6.0; // sun (not at night)
   return c;
 }`;
 
@@ -481,14 +481,15 @@ void main() {
       col = cam * (1.0 - 0.35 * fx1) + neon * (line * 1.1 + glow * 0.3) * fx + glare * 0.5;
       col = mix(col, still, body);
     } else if (uMode == 5) {
-      // Liquid trails: drawn by the feedback pass.
+      // Liquid trails: drawn by the feedback pass. Effect up to 1 fades them in
+      // over the rippled camera; past 1 they last longer (see TRAIL_FRAG).
       col = mix(cam, texture(uTrail, vUv).rgb, fx1) + glare * 0.7;
     } else if (uMode == 6) {
       // Thermal camera: brightness read as heat on a rainbow scale, the water
       // shifting it and the body running hot.
       float lum = luma(cam);
       vec3 heat = rainbow(lum * 1.1 + h * 0.6 * uRelief + body * 0.35 + hue * 0.2) * (0.35 + 0.75 * lum + 0.2 * body);
-      col = mix(cam, heat, clamp(fx * 0.6, 0.0, 1.0)) + glare * 0.6;
+      col = mix(cam, heat, clamp(min(fx * 0.6, 0.2 + fx * 0.4), 0.0, 1.0)) + glare * 0.6; // all heat at Effect 2
     } else if (uMode == 7) {
       // Caustic light: the waves focus light into bright threads on the
       // picture, each colour focused in a slightly different place.
@@ -556,7 +557,8 @@ void main() {
       water += (1.0 - through) * vec3(0.0, 0.12, 0.16);             // the water's own glow
       float F = 0.02 + 0.98 * pow(1.0 - n.z, 5.0);
       water = mix(water, vec3(0.55, 0.70, 0.90), F * 0.8) + vec3(1.0) * spec * 0.8;
-      col = mix(cam + glare, water, fx1);
+      // Effect past 1 exaggerates the water: bluer depths, brighter caustics.
+      col = max(mix(cam + glare, water, fx), 0.0);
       col = mix(col, still, body);
     }
   } else {
@@ -625,6 +627,7 @@ uniform float uRelief;
 uniform float uDeform;
 uniform float uTurn;        // hue turned per frame, radians
 uniform float uFresh;       // 1 on the first frame: start from the plain picture
+uniform float uFx;          // the Effect slider: past 1, trails last longer
 ${CAM_UV}
 ${COLOR}
 
@@ -650,7 +653,9 @@ void main() {
   vec2 c = camUv(vUv + slope * 0.05 * uDeform);
   vec3 cam = texture(uVideo, c).rgb * inCam(c);
   float body = smoothstep(0.4, 0.6, texture(uMask, vUv).r);
-  float feed = max(uFresh, 0.02 + 0.45 * body);
+  // Fresh picture seeps back in everywhere, wiping old trails: over about a
+  // second at Effect 1, three at Effect 2.
+  float feed = max(uFresh, 0.02 / max(uFx * uFx, 1.0) + 0.45 * body);
   outColor = vec4(mix(prev, cam, feed), 1.0);
 }`;
 

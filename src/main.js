@@ -348,6 +348,7 @@ function startDemo() {
 
 function begin() {
   boot.hidden = true;
+  refreshControls(); // camera-only controls, now the source is known
   cameraSince = performance.now();
   // On a phone the panel would cover half the water; it starts tucked away.
   setPanel(!TOUCH);
@@ -507,6 +508,7 @@ function runTrailPass(videoTex, xform) {
     .f('uDeform', +ui.deform.value)
     .f('uTurn', +ui.cycle.value * 0.04)
     .f('uFresh', trailFresh ? 1 : 0)
+    .f('uFx', +ui.fx.value)
     .i('uMirror', ui.mirror.checked ? 1 : 0)
     .v4('uCamXform', xform);
   quad.draw();
@@ -703,10 +705,7 @@ for (const k of ['volume', 'melody', 'voices', 'clarity', 'slush', 'water']) {
   ui[k].addEventListener('input', () => audio.set(k, +ui[k].value));
 }
 ui.scale.addEventListener('change', () => audio.setScale(ui.scale.value));
-ui.pitch.addEventListener('change', () => {
-  audio.setPitch(ui.pitch.value);
-  ui.scale.disabled = ui.pitch.value === 'glide'; // a free glide has no scale
-});
+ui.pitch.addEventListener('change', () => audio.setPitch(ui.pitch.value));
 
 // The frame loop stops in a hidden tab; stop the sound with it rather than
 // leave the last chord hanging.
@@ -715,16 +714,28 @@ document.addEventListener('visibilitychange', () => {
   audio.setEnabled(!document.hidden && ui.sound.checked);
 });
 
-// Each look shows only the sliders that do something in it: a control row
-// with data-looks="2 3 4" appears for those looks and hides for the rest.
-function showLookControls() {
+// The panel shows only controls that do something with the current settings.
+// A row's data attributes say when it applies: data-looks="2 3 4" in those
+// looks; data-skies in those skies, when the look is the sky reflection (in
+// any other look it does not count); data-pitch in those pitch modes;
+// data-needs="sound" only while that box is ticked; data-source="camera" only
+// with a camera, not the stand-in figure.
+function refreshControls() {
   const look = ui.look.value;
-  for (const row of panel.querySelectorAll('[data-looks]')) {
-    row.hidden = !row.dataset.looks.split(' ').includes(look);
+  const among = (list, value) => list === undefined || list.split(' ').includes(value);
+  for (const row of panel.querySelectorAll('[data-looks], [data-skies], [data-pitch], [data-needs], [data-source]')) {
+    const d = row.dataset;
+    row.hidden = !(
+      among(d.looks, look) &&
+      (look !== '9' || among(d.skies, ui.sky.value)) &&
+      among(d.pitch, ui.pitch.value) &&
+      (d.needs === undefined || ui[d.needs].checked) &&
+      (source === null || among(d.source, source))
+    );
   }
 }
-ui.look.addEventListener('change', showLookControls);
-showLookControls();
+for (const id of ['look', 'sky', 'pitch', 'sound', 'ripples']) ui[id].addEventListener('change', refreshControls);
+refreshControls();
 
 ui.showmask.addEventListener('change', () => {
   maskview.hidden = !ui.showmask.checked;

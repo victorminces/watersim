@@ -56,6 +56,9 @@ const SPEED_HI = 0.65;
 const MOVE_LO = 0.004;
 const MOVE_HI = 0.06;
 const MOVE_GAIN = 1.0;   // the movement's feed into the resonators at full voice
+// Following movement, the chord stacked on the speed's note by Voices: each
+// added voice is every other scale note further up, at this share of the lead.
+const CHORD = [1, 0.7, 0.55, 0.45];
 const PITCH_LO = 110;    // A2: the demo's ripples then sing around A4-E5
 const SEMIS = 36;
 const PC_LO = 0;         // pitch class of the bottom band, counted up from A
@@ -349,17 +352,38 @@ export class WaterAudio {
     const ranked = cand
       .filter((c) => c.e > top * 0.05)
       .sort((a, b) => b.e * (this.active.has(b.i) ? 1.4 : 1) - a.e * (this.active.has(a.i) ? 1.4 : 1));
-    const keep = new Set(ranked.slice(0, want).map((c) => c.i));
-    this.active = keep;
+
+    // Which notes sing, how loud, and from where (the zone mix they pan by).
+    const voices = new Map();
+    if (this.bySpeed) {
+      // Following movement there is one note, the speed's, and Voices stacks
+      // a chord on it from the scale: every other scale note above it, each
+      // quieter. (Ranked by strength like the water's notes, the extra voices
+      // were only the lead's faint neighbours, too quiet to hear.)
+      const lead = ranked[0];
+      if (lead) {
+        const r = cand.indexOf(lead);
+        const level = Math.pow(lead.e / norm, 1.2);
+        for (let k = 0; k < want; k++) {
+          let j = r + 2 * k;
+          if (j >= cand.length) j = r - 2 * k; // past the top: below the lead instead
+          if (j >= 0) voices.set(cand[j].i, { level: level * CHORD[k], from: lead });
+        }
+      }
+      this.active = new Set(lead ? [lead.i] : []);
+    } else {
+      for (const c of ranked.slice(0, want)) voices.set(c.i, { level: Math.pow(c.e / norm, 0.7), from: c });
+      this.active = new Set(voices.keys());
+    }
 
     const quiet = top < 1e-4;
     this.sounding = [];
     for (const c of cand) {
-      const on = !quiet && keep.has(c.i);
-      const level = on ? Math.pow(c.e / norm, this.bySpeed ? 1.2 : 0.7) : 0;
-      const pan = c.e > 0 ? colPanF(c.x / c.e, this.cols) * 0.85 : 0;
-      this.#steer(this.bank[c.i], level, pan, now);
-      if (on) this.sounding.push(noteName(this.bank[c.i].f) + ' ' + level.toFixed(2));
+      const v = quiet ? undefined : voices.get(c.i);
+      const from = v ? v.from : c;
+      const pan = from.e > 0 ? colPanF(from.x / from.e, this.cols) * 0.85 : 0;
+      this.#steer(this.bank[c.i], v ? v.level : 0, pan, now);
+      if (v) this.sounding.push(noteName(this.bank[c.i].f) + ' ' + v.level.toFixed(2));
     }
     // Off-scale bands stay silent (a scale change lets them ring out).
     for (let i = 0; i < SEMIS; i++) if (!steps.includes((PC_LO + i) % 12)) this.#steer(this.bank[i], 0, this.bank[i].pan, now);
