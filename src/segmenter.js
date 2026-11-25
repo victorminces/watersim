@@ -6,7 +6,24 @@ const MODEL =
   'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite';
 
 export class Segmenter {
-  constructor() {
+  // maxSide: shrink camera frames to at most this many pixels on their long
+  // side before segmenting (0 keeps them as they come). The model only ever
+  // sees 256x256, but the mask comes back at the size it was given, and a
+  // phone camera's 2560x1280 frame made a 3.3-megapixel mask to copy, scan
+  // and upload: 270 ms a frame on a Pixel, against 0.7 ms for the water.
+  //
+  // worker: segment in a Web Worker (segworker.js). On a Pixel even the
+  // shrunk frame takes ~35 ms on the CPU, and on the page's main thread that
+  // holds every frame of the water to it. In a worker the water draws at the
+  // screen's rate and the masks arrive when they are ready. If the worker
+  // cannot start, segmentation runs on the page as before.
+  constructor({ maxSide = 0, worker = false } = {}) {
+    this.maxSide = maxSide;
+    this.useWorker = worker;
+    this.worker = null;
+    this.lastMs = 0;
+    this.pending = null;   // {resolve, reject} for the worker's next 'ready'
+    this.small = null;     // canvas holding the shrunk frame (main-thread path)
     this.ready = false;
     this.buf = null;       // Uint8Array, 0 or 255 per pixel
     this.width = 0;
@@ -25,6 +42,15 @@ export class Segmenter {
   }
 
   async load() {
+    if (this.useWorker && typeof Worker !== 'undefined' && typeof createImageBitmap !== 'undefined') {
+      try {
+        await this.#startWorker();
+        return;
+      } catch (err) {
+        console.warn('Body detection could not start in a worker; running it on the page.', err);
+        this.#stopWorker();
+      }
+    }
     const { ImageSegmenter, FilesetResolver } = await import(/* @vite-ignore */ CDN);
     this.ImageSegmenter = ImageSegmenter;
     this.vision = await FilesetResolver.forVisionTasks(CDN + '/wasm');
@@ -40,6 +66,10 @@ export class Segmenter {
   // without complaint and then return masks with nobody in them, ever.
   async useCpu() {
     this.ready = false;
+    if (this.worker) {
+      await this.#ask({ type: 'cpu' });
+      return;
+    }
     if (this.seg) this.seg.close();
     this.seg = null;
     await this.#create('CPU');
@@ -52,11 +82,65 @@ export class Segmenter {
       outputCategoryMask: true,
       outputConfidenceMasks: false,
     });
+    this.#isReady(delegate);
+  }
+
+  #isReady(delegate) {
     this.delegate = delegate;
     this.varied = false;
     this.busy = false;
     this.ready = true;
   }
+
+  // ------------------------------------------------------------ worker
+
+  #startWorker() {
+    // The same version query as this module, so a deploy never pairs a fresh
+    // page with a stale worker.
+    const url = new URL('segworker.js' + new URL(import.meta.url).search, import.meta.url);
+    this.worker = new Worker(url);
+    this.worker.onmessage = (e) => this.#fromWorker(e.data);
+    this.worker.onerror = (e) => {
+      e.preventDefault();
+      this.#settle(new Error(e.message || 'worker failed'));
+    };
+    return this.#ask({ type: 'load', cdn: CDN, model: MODEL });
+  }
+
+  #stopWorker() {
+    if (this.worker) this.worker.terminate();
+    this.worker = null;
+  }
+
+  #ask(msg) {
+    return new Promise((resolve, reject) => {
+      this.pending = { resolve, reject };
+      this.worker.postMessage(msg);
+    });
+  }
+
+  #settle(err) {
+    const p = this.pending;
+    this.pending = null;
+    if (p) err ? p.reject(err) : p.resolve();
+  }
+
+  #fromWorker(m) {
+    if (m.type === 'mask') {
+      if (m.data) this.#consume(m.data, m.width, m.height);
+      this.lastMs = m.ms; // time the worker spent on it, for the curious
+      this.busy = false;
+    } else if (m.type === 'ready') {
+      this.#isReady(m.delegate);
+      this.#settle(null);
+    } else if (m.type === 'error') {
+      this.#settle(new Error(m.message));
+    } else if (m.type === 'log') {
+      console.warn(m.text);
+    }
+  }
+
+  // ------------------------------------------------------------ per frame
 
   // Call once per animation frame; skips work when there is no new video frame.
   process(video) {
@@ -66,10 +150,20 @@ export class Segmenter {
     this.lastVideoTime = video.currentTime;
     this.stamp += 33;
     this.busy = true;
+    if (this.worker) {
+      const [w, h] = this.#size(video);
+      const stamp = this.stamp;
+      createImageBitmap(video, { resizeWidth: w, resizeHeight: h, resizeQuality: 'low' }).then(
+        (bitmap) => this.worker.postMessage({ type: 'frame', bitmap, stamp }, [bitmap]),
+        () => { this.busy = false; },
+      );
+      return;
+    }
     try {
-      this.seg.segmentForVideo(video, this.stamp, (result) => {
+      this.seg.segmentForVideo(this.#shrink(video), this.stamp, (result) => {
         try {
-          this.#consume(result);
+          const mask = result.categoryMask;
+          if (mask) this.#consume(mask.getAsUint8Array(), mask.width, mask.height);
         } finally {
           result.close();
           this.busy = false;
@@ -81,10 +175,24 @@ export class Segmenter {
     }
   }
 
-  #consume(result) {
-    const mask = result.categoryMask;
-    if (!mask) return;
-    const src = mask.getAsUint8Array();
+  #size(video) {
+    const k = this.maxSide ? Math.min(1, this.maxSide / Math.max(video.videoWidth, video.videoHeight)) : 1;
+    return [Math.round(video.videoWidth * k), Math.round(video.videoHeight * k)];
+  }
+
+  #shrink(video) {
+    const [w, h] = this.#size(video);
+    if (w === video.videoWidth) return video;
+    if (!this.small) this.small = document.createElement('canvas');
+    if (this.small.width !== w || this.small.height !== h) {
+      this.small.width = w;
+      this.small.height = h;
+    }
+    this.small.getContext('2d').drawImage(video, 0, 0, w, h);
+    return this.small;
+  }
+
+  #consume(src, w, h) {
     if (!this.buf || this.buf.length !== src.length) this.buf = new Uint8Array(src.length);
     // Which label is the person has differed between model releases and
     // devices: keep the non-zero label as "body" here, and let the app invert
@@ -95,7 +203,6 @@ export class Segmenter {
       this.buf[i] = on ? 255 : 0;
       if (on) hit++;
     }
-    const w = mask.width, h = mask.height;
     this.width = w;
     this.height = h;
     this.coverage = hit / src.length;
@@ -119,6 +226,7 @@ export class Segmenter {
 
   close() {
     if (this.seg) this.seg.close();
+    this.#stopWorker();
     this.ready = false;
   }
 }

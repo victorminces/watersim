@@ -72,11 +72,13 @@ export class Program {
   v4(name, a) { this.gl.uniform4f(this.loc(name), a[0], a[1], a[2], a[3]); return this; }
   v4a(name, arr) { this.gl.uniform4fv(this.loc(name), arr); return this; }
 
-  tex(name, texture) {
+  // sampler: optional, overrides the texture's own filtering (see exactSampler).
+  tex(name, texture, sampler = null) {
     const gl = this.gl;
     const unit = this.unit++;
     gl.activeTexture(gl.TEXTURE0 + unit);
     gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.bindSampler(unit, sampler);
     gl.uniform1i(this.loc(name), unit);
     return this;
   }
@@ -90,6 +92,21 @@ export function makeTexture(gl, filter = gl.LINEAR) {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   return t;
+}
+
+// For a pass that reads a grid of its own size cell by cell, as the wave
+// solver does. Linear filtering ought to return a cell's own value when
+// sampled at its centre, but some phone GPUs (PowerVR on the Pixel) come back
+// up to ~1.5% off on half-float textures. The solver re-reads every cell 16
+// times a frame, and that error grows into short, even stripes over the whole
+// pool within a quarter of a second. Nearest-cell reads are exact.
+export function exactSampler(gl) {
+  const s = gl.createSampler();
+  gl.samplerParameteri(s, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.samplerParameteri(s, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.samplerParameteri(s, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.samplerParameteri(s, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return s;
 }
 
 export function makeTarget(gl, w, h) {

@@ -11,7 +11,7 @@
 const V = new URL(import.meta.url).search;
 const { VERT, MASK_FRAG, SPLAT_FRAG, SIM_FRAG, RENDER_FRAG, REDUCE_FRAG, TRAIL_FRAG, GRATE_FRAG } = await import('./shaders.js' + V);
 const {
-  createGL, Program, PingPong, makeTexture, makeTarget, fullscreenQuad, bindTarget, Readback,
+  createGL, Program, PingPong, makeTexture, makeTarget, fullscreenQuad, bindTarget, Readback, exactSampler,
 } = await import('./glx.js' + V);
 const { Segmenter } = await import('./segmenter.js' + V);
 const { DemoMask } = await import('./demo.js' + V);
@@ -21,12 +21,13 @@ const { WaterAudio, SCALES } = await import('./audio.js' + V);
 // panel since there is no H key.
 const TOUCH = window.matchMedia('(pointer: coarse)').matches;
 // Grid budget, laid out to the screen aspect; the Detail slider scales it.
-// The waves a moving body makes are a set number of cells long (see SUBSTEPS),
-// so the grid decides how big they look. A laptop's ~265 cells across its
-// short side make ripples ~2% of it, which on a ~19 cm screen reads well; the
-// same 2% of a ~7 cm phone is fizz. Phones get ~120 cells across, so ripples
-// are ~2.5x larger relative to the screen (and the GPU has far less to do).
-const CELLS = TOUCH ? 120 * 267 : 512 * 288;
+// Waves cross a set number of cells per frame, so the grid also decides how
+// fast they look: with fewer cells across, they cross the screen sooner.
+// Phones once had a coarser grid (~120 cells across, against ~288 on a laptop)
+// to make ripples bigger, but at 60 fps that made every wave cross the screen
+// ~2.3x faster than on a laptop. The same budget everywhere keeps the water
+// looking the same, relative to the screen; a Pixel runs it at ~58 fps.
+const CELLS = 512 * 288;
 // Wave steps per animation frame. This also sets the shortest wave the pool can
 // make: a moving contour can only emit at the distance a wave travels between
 // camera frames, so too few substeps and the body sheds grid-scale fizz instead
@@ -72,7 +73,7 @@ function setPanel(show) {
   panelBtn.textContent = show ? 'Hide' : 'Controls';
 }
 
-let gl, quad, progMask, progSplat, progSim, progRender, progReduce, progTrail;
+let gl, quad, exact, progMask, progSplat, progSim, progRender, progReduce, progTrail;
 let trail = null, trailFresh = true; // the liquid-trails picture (look 5)
 let progGrate, grate = null;          // ripple structure for diffraction (look 8)
 
@@ -101,6 +102,7 @@ let frames = 0, fpsClock = 0, fps = 0;
 function initGL() {
   gl = createGL(canvas);
   quad = fullscreenQuad(gl);
+  exact = exactSampler(gl); // for the passes that step the water, see glx.js
   progMask = new Program(gl, VERT, MASK_FRAG);
   progSplat = new Program(gl, VERT, SPLAT_FRAG);
   progSim = new Program(gl, VERT, SIM_FRAG);
@@ -168,7 +170,7 @@ async function startCamera() {
     await openCamera();
     if (!segmenter) {
       bootMsg.textContent = 'Loading body detection…';
-      segmenter = new Segmenter();
+      segmenter = new Segmenter({ maxSide: TOUCH ? 384 : 0, worker: TOUCH });
       try {
         await segmenter.load();
       } catch (err) {
@@ -319,10 +321,13 @@ function watchCamera(now) {
     action = restartCamera;
   } else if (segmenter.generation === 0 && now - cameraSince > 8000) {
     msg = 'Body detection has not started. This device may be too slow for it.';
-  } else if (TOUCH && !cpuTried && !segmenter.varied && segmenter.delegate === 'GPU' && segmenter.generation > 150) {
-    // Five-odd seconds of masks with nobody in them, on a phone's GPU: on some
-    // phones that path runs but returns blanks. Try the CPU once. (Not on a
-    // laptop, where an empty room at start is the likelier story.)
+  } else if (TOUCH && !cpuTried && !segmenter.varied && segmenter.delegate === 'GPU' &&
+             segmenter.generation > 30 && now - cameraSince > 2500) {
+    // A few seconds of masks with nobody in them, on a phone's GPU: on some
+    // phones (a Pixel's PowerVR, for one) that path runs but returns blanks.
+    // Try the CPU once. A selfie camera rarely has nobody in front of it, and
+    // waiting longer is time the water ignores the person. (Not on a laptop,
+    // where an empty room at start is the likelier story.)
     switchToCpu();
     msg = 'Switching body detection to the CPU…';
   } else if (!segmenter.varied && now - cameraSince > 6000) {
@@ -441,7 +446,7 @@ function runMaskPass(rawTex, xform) {
   bindTarget(gl, mask.write);
   progMask.use()
     .tex('uRaw', rawTex)
-    .tex('uPrev', mask.read.tex)
+    .tex('uPrev', mask.read.tex, exact)
     .v2('uTexel', 1 / simW, 1 / simH)
     .f('uEase', +ui.ease.value)
     .f('uSoft', +ui.soft.value)
@@ -468,7 +473,7 @@ function runSplatPass() {
 
   bindTarget(gl, sim.write);
   progSplat.use()
-    .tex('uSim', sim.read.tex)
+    .tex('uSim', sim.read.tex, exact)
     .v4a('uDrops', data)
     .i('uDropCount', n)
     .f('uAspect', simW / simH);
@@ -479,8 +484,8 @@ function runSplatPass() {
 function runSimPass(step) {
   bindTarget(gl, sim.write);
   progSim.use()
-    .tex('uSim', sim.read.tex)
-    .tex('uMask', mask.read.tex)
+    .tex('uSim', sim.read.tex, exact)
+    .tex('uMask', mask.read.tex, exact)
     .v2('uTexel', 1 / simW, 1 / simH)
     .f('uC2', +ui.speed.value)
     // The slider is wave life per frame; the solver wants it per substep.
@@ -682,6 +687,39 @@ for (const id of ['obstacle', 'ripples', 'look', 'palette', 'speed', 'damp', 'pu
   'deform', 'cycle', 'grating', 'fx', 'lightaz', 'sky', 'sunh', 'clouds', 'depth', 'causticamt']) {
   ui[id] = el(id);
 }
+
+// A slider marked data-mid has its default (or data-mid's value) at the middle
+// of its travel. Most defaults sat in the bottom fifth of their range, so the
+// region that matters got a fifth of the bar and the rest went on extremes.
+// The bar runs 0..1 underneath, bent through min, middle and max by an
+// exponential: each step along it multiplies the distance from min by the
+// same factor, which suits speeds, times and strengths, and unlike a power
+// curve leaves no dead stretch at the bottom. The element's .value is
+// redefined to read and write the real value, so everything that reads
+// ui.x.value (or sets it) works in real units.
+const nativeValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+function curveSlider(input) {
+  const min = +input.min, max = +input.max, def = +input.getAttribute('value');
+  const mid = input.dataset.mid ? +input.dataset.mid : def;
+  const f = Math.min(0.999, Math.max(0.001, (mid - min) / (max - min)));
+  const x = (1 - f) / f; // real(0.5) = mid exactly
+  const flat = Math.abs(x - 1) < 1e-3;
+  const real = (p) => min + (max - min) * (flat ? p : (Math.pow(x, 2 * p) - 1) / (x * x - 1));
+  const place = (v) => {
+    const t = Math.min(1, Math.max(0, (v - min) / (max - min)));
+    return flat ? t : Math.log(1 + t * (x * x - 1)) / (2 * Math.log(x));
+  };
+  input.min = 0;
+  input.max = 1;
+  input.step = 'any';
+  Object.defineProperty(input, 'value', {
+    configurable: true,
+    get() { return String(+real(+nativeValue.get.call(this)).toPrecision(6)); },
+    set(v) { nativeValue.set.call(this, String(place(+v))); },
+  });
+  input.value = def;
+}
+for (const input of panel.querySelectorAll('input[type=range][data-mid]')) curveSlider(input);
 
 for (const name of Object.keys(PALETTES)) {
   const opt = document.createElement('option');

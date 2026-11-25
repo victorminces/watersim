@@ -151,9 +151,15 @@ float openAt(float m) {
 // Laplacian grows modes of its own, and they surface as a stippled rim of
 // runaway checkerboard along the body. A closed edge carries no flux, which is
 // a reflecting wall. The edge of the screen is open instead: see main().
+// Past the edge of the grid there is no neighbour, so no flux. That test is
+// written without a branch on purpose: as an early return
+// (if (uv.x < 0.0 || ...) return vec2(0.0);) the Pixel's PowerVR compiler
+// dropped the neighbour above on nearly every cell, inside the grid too. The
+// wave equation then gains energy each step, and within a quarter of a second
+// the pool is short, even stripes from edge to edge.
 vec2 fluxFrom(vec2 uv, float openC, vec2 c) {
-  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return vec2(0.0);
-  return (texture(uSim, uv).rg - c) * openC * openAt(maskAt(uv));
+  float inside = step(0.0, uv.x) * step(uv.x, 1.0) * step(0.0, uv.y) * step(uv.y, 1.0);
+  return (texture(uSim, uv).rg - c) * (openC * openAt(maskAt(uv)) * inside);
 }
 
 void main() {

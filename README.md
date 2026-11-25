@@ -17,6 +17,30 @@ python -m http.server 8123
 Then open <http://localhost:8123/>. Click **Start camera**, or **Run without
 camera** to drive the water with a procedural stand-in silhouette.
 
+### On a phone, linked to this PC
+
+```powershell
+python tools/phonelink.py serve
+```
+
+serves the app over https to a phone on the same Wi-Fi and writes a QR code
+for it (the path is printed). The certificate is self-made, so the phone warns
+once: *Advanced → Proceed*. The page then reports back to the PC (console
+output, errors, the device and its GPU, a heartbeat with the frame rate) and
+takes commands from it, from this PC only:
+
+```powershell
+python tools/phonelink.py status
+python tools/phonelink.py log
+python tools/phonelink.py run "__water.segmenter.delegate"
+python tools/phonelink.py snap
+python tools/phonelink.py reload
+```
+
+`snap` saves a picture of the canvas; `reload` picks up edited files (nothing
+is cached). Logs, pictures and the certificate stay in a temp folder. The
+same app is also served at <http://localhost:8444/> for a browser on the PC.
+
 ## Controls
 
 `H` hides the panel · `F` fullscreen · `M` mutes · `C` calms the water · click or drag on
@@ -27,6 +51,11 @@ something with the current settings: each look its own sliders, the sky
 reflection those of its sky, Ripple push only while Motion ripples is on, the
 sound's controls only while Sound is on, Scale only when the pitch snaps to
 it, and the camera's framing, mask inversion and preview only with a camera.
+
+Every slider starts with its default at the middle of its bar, and the bar is
+bent (exponentially) so the stretch around the default gets most of its
+travel: half the bar lies below the default, half above. Sliders are
+continuous; only Voices moves in whole steps.
 
 **Body** — how the silhouette touches the water.
 
@@ -59,7 +88,7 @@ it, and the camera's framing, mask inversion and preview only with a camera.
 
 | Control | What it does |
 | --- | --- |
-| Wave speed | Propagation speed (c², capped at 0.45 for stability). |
+| Wave speed | How fast waves travel: from about half the default speed to about double (c² 0.025-0.45, capped for stability). |
 | Wave life | How long waves survive before damping out. |
 | Rain | Random droplets, so the pool is never dead still. |
 | Detail | Fineness of the water grid: finer makes smaller waves relative to the screen, at more GPU cost. Changing it stills the water. |
@@ -86,7 +115,7 @@ it, and the camera's framing, mask inversion and preview only with a camera.
 | Resonators | Level of the water made to sing. |
 | Voices | How many resonators sing at once (1-4). Following movement speed, the chord built on the speed's note: each voice adds every other scale note above it, each quieter. |
 | Clarity | Width of the resonators: low is water with a colour, high is a pure singing tone. |
-| Pitch | What picks the resonators' notes: ripple size on the scale, ripple size gliding freely, or how fast the body moves, on the scale. |
+| Pitch | What picks the resonators' notes: ripple size on the scale, ripple size gliding freely, or how fast the body moves (against its own usual pace), on the scale. |
 | Scale | Scale to snap to: major or minor pentatonic, Hirajoshi, Dorian, Lydian. |
 
 ## Natural colour
@@ -148,9 +177,14 @@ the water is doing, measured over a 16×8 grid of zones laid over the pool.
   the contour moves picks the note: its speed in screens per second, measured
   on the GPU as the mask's change over its slope (a contour moving at *v*
   changes the mask by *v*·|∇m| per frame), weighted towards the parts that move
-  most. About 0.08-0.65 screens per second maps onto the three octaves, so each
-  doubling of speed is an octave up: a slow sway sings around A2, an arm swung
-  briskly near the top. The flicker of a still body's edge is measured on a
+  most. The three octaves span the body's own range of speeds, learnt while it
+  moves (the mean and spread of the log of its speed over roughly the last 12
+  seconds of movement), so a pace slower than usual sings low and a faster one
+  high, however near the camera is: a phone at arm's length reads the same
+  gesture as several times faster than a laptop's webcam across the room, and
+  on a fixed scale every movement sang at the top. It starts out as 0.08-0.65
+  screens per second, an octave per doubling of speed. A note the lead has
+  moved on from fades in ~0.3 s, so one voice is one note at a time. The flicker of a still body's edge is measured on a
   calmer copy of the mask, where back-and-forth noise cancels out, and gated by
   a floor that learns how much a body at rest seems to move.
 
@@ -187,7 +221,13 @@ frame and the audio runs with large buffers, both to avoid crackle.
 - Velocity viscosity mops up grid-scale noise and is capped by the wave speed
   (the checkerboard mode is bounded only while c² + 2·viscosity ≤ 0.5).
 - Grid sized to the window aspect at a fixed budget (512×288 cells),
-  ping-ponged `RGBA16F` targets.
+  ping-ponged `RGBA16F` targets. The passes that step the water read their own
+  grids through a nearest-cell sampler: on a Pixel's PowerVR GPU, linear
+  filtering of half floats is up to 1.5% off even at a cell's centre.
+- No early returns on per-cell conditions in the wave step: the same GPU's
+  compiler mishandled one (the off-the-grid test) and dropped the neighbour
+  above almost every cell, which made the pool gain energy and fill with short,
+  even stripes within a quarter of a second.
 - Debugging, from the console: `__water.read('sim' | 'mask', x, y, w, h)`
   returns raw texture values, `__water.zoneStats()` the sound grid,
   `__water.step(ms)` advances one frame by hand, and `__water.audio.rms()` meters
@@ -198,14 +238,23 @@ frame and the audio runs with large buffers, both to avoid crackle.
 WebGL2 with `EXT_color_buffer_float` (any current desktop browser), a webcam,
 and an internet connection the first time, to fetch the segmentation model.
 
-On phones and tablets the grid is coarser (about 120 cells across the short
-side, against ~265 on a laptop): the waves a moving body makes are a fixed
-number of cells long, so on a small screen a fine grid makes them look like
-fizz. The Detail slider trades this back. The panel starts tucked behind a
+Phones and tablets get the same grid budget as a laptop (~285 cells across
+the short side). Waves cross a fixed number of cells per frame, so a coarser
+grid (phones once had ~120 cells across) makes them cross the screen faster:
+at 60 fps that was ~2.3x a laptop's pace. A Pixel runs the full grid at ~58
+fps; Detail trades it down on slower phones. The panel starts tucked behind a
 **Controls** button, and the camera is asked for its own mode closest to the
 screen's shape, rather than being cropped to it by the browser. The
 camera needs https, so use the live link. If the camera is refused, sends
 nothing, or gets switched off (screen locked, another app), a notice says so,
 and tapping it restarts the camera. If body detection on a phone's GPU returns
-nothing but empty masks for a few seconds, it switches to the CPU by itself. On iPhone, the ring/silent switch mutes the
-sound.
+nothing but empty masks for a few seconds, it switches to the CPU by itself.
+
+Body detection on a phone runs in a Web Worker (`src/segworker.js`) on frames
+shrunk to 384 pixels: it takes ~70 ms a mask on a Pixel's CPU, and on the
+page's own thread that held the water to it. Measured on a Pixel: the water and
+drawing take ~3 ms a frame, so it runs at 60 fps, with ~11 new masks a second
+that the mask easing glides between. (Before: 8 fps, with the full 2560×1280
+camera frame segmented on the page.)
+
+On iPhone, the ring/silent switch mutes the sound.

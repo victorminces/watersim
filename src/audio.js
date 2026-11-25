@@ -48,6 +48,18 @@ const HZ_HI = 4.5;
 // flickers by a pixel or two; under SPEED_LO that is faded out.
 const SPEED_LO = 0.08;
 const SPEED_HI = 0.65;
+// ... but that is only where the map starts. How fast a gesture reads depends
+// on how close the camera is: a phone at arm's length sees the same wave of a
+// hand sweep half the screen, and measured on a Pixel, movement read ~0.5
+// nearly always, so the note sat in the top sixth and the low notes never
+// came. So the map follows the body's own range: the mean and spread of its
+// (log) speed while it moves, learnt over about SPEED_LEARN seconds of
+// movement, ±SPEED_SPREAD spreads across the three octaves, and the spread
+// never narrows below SPEED_SD_MIN (or one steady pace would swing octaves).
+// It starts as exactly SPEED_LO..SPEED_HI.
+const SPEED_LEARN = 12;
+const SPEED_SPREAD = 1.5;
+const SPEED_SD_MIN = 0.35;
 // How much of the body moves, as the share of the screen its contour sweeps
 // per second: MOVE_LO is the least that sings, MOVE_HI full voice. The bottom
 // also follows the quietest sweep of the last few seconds (the flicker of a
@@ -94,6 +106,9 @@ export class WaterAudio {
     this.drive = 0;        // movement feeding the resonators (speed mode), 0..1
     this.floor = MOVE_LO;  // the sweep of a body at rest: segmentation flicker
     this.moveU = 0.3;      // the movement's place in the three octaves, 0..1
+    // The body's own range of movement speeds, in log units (see SPEED_LEARN).
+    this.speedMu = Math.log(Math.sqrt(SPEED_LO * SPEED_HI));
+    this.speedVar = (Math.log(SPEED_HI / SPEED_LO) / (2 * SPEED_SPREAD)) ** 2;
     this.moveCol = (cols - 1) / 2;
     this.move = { speed: 0, sweep: 0 }; // last measurement, for the console
     this.bank = [];      // one resonator per semitone, used snapped
@@ -309,7 +324,13 @@ export class WaterAudio {
     const amount = gate * smooth01(over / Math.LN2) * (0.4 + 0.6 * clamp01(over / Math.log(MOVE_HI / lo)));
     this.drive += (amount - this.drive) * (1 - Math.exp(-dt / (amount > this.drive ? 0.05 : 0.3)));
     if (amount > 0.05) {
-      const u = clamp01(Math.log(speed / SPEED_LO) / Math.log(SPEED_HI / SPEED_LO));
+      const ls = Math.log(Math.max(speed, 1e-6));
+      const learn = 1 - Math.exp(-dt / SPEED_LEARN);
+      this.speedMu += (ls - this.speedMu) * learn;
+      this.speedVar += ((ls - this.speedMu) ** 2 - this.speedVar) * learn;
+      const sd = Math.max(SPEED_SD_MIN, Math.sqrt(this.speedVar));
+      const u = clamp01(0.5 + (ls - this.speedMu) / (2 * SPEED_SPREAD * sd));
+      this.move.range = [Math.exp(this.speedMu - SPEED_SPREAD * sd), Math.exp(this.speedMu + SPEED_SPREAD * sd)];
       const k = 1 - Math.exp(-dt / 0.1);
       this.moveU += (u - this.moveU) * k;
       this.moveCol += (x / dm - this.moveCol) * k;
@@ -382,7 +403,10 @@ export class WaterAudio {
       const v = quiet ? undefined : voices.get(c.i);
       const from = v ? v.from : c;
       const pan = from.e > 0 ? colPanF(from.x / from.e, this.cols) * 0.85 : 0;
-      this.#steer(this.bank[c.i], v ? v.level : 0, pan, now);
+      // Following movement, a note the lead has moved on from fades in ~0.3 s:
+      // at the water's ~0.7 s, a gesture that ran up the scale left a cluster
+      // of its notes ringing together.
+      this.#steer(this.bank[c.i], v ? v.level : 0, pan, now, this.bySpeed ? 0.3 : 0.7);
       if (v) this.sounding.push(noteName(this.bank[c.i].f) + ' ' + v.level.toFixed(2));
     }
     // Off-scale bands stay silent (a scale change lets them ring out).
@@ -445,10 +469,10 @@ export class WaterAudio {
   }
 
   // Ease a resonator towards a level and a place: in over ~0.15 s, out over
-  // ~0.7 s, so voices come and go like swells rather than switches.
-  #steer(r, level, pan, now) {
+  // ~0.7 s (or `release`), so voices come and go like swells, not switches.
+  #steer(r, level, pan, now, release = 0.7) {
     if (Math.abs(level - r.level) > 0.01) {
-      r.vg.gain.setTargetAtTime(level, now, level > r.level ? 0.15 : 0.7);
+      r.vg.gain.setTargetAtTime(level, now, level > r.level ? 0.15 : release);
       r.level = level;
     }
     if (Math.abs(pan - r.pan) > 0.05) {
