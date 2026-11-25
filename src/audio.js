@@ -38,28 +38,35 @@ const HZ_LO = 0.7;
 const HZ_HI = 4.5;
 // Movement speed onto pitch, for the "movement speed" mode. Speed is how fast
 // the body's contour moves, in lengths of the screen's short side per second,
-// weighted towards the parts that move most (see REDUCE_FRAG); SPEED_LO..
-// SPEED_HI maps it logarithmically onto the three octaves: each doubling of
-// speed is an octave up, so an ordinary change of pace is a clear change of
-// note. Measured with a shape moving at known speeds, the reading is ~0.8x
-// the true speed (a contour's sides slide along themselves) and, at the
-// default mask easing, tops out near 0.7 once movement passes ~1 screen per
-// second. A body standing still reads ~0.01-0.06 where the segmenter's edge
-// flickers by a pixel or two; under SPEED_LO that is faded out.
+// weighted towards the parts that move most (see REDUCE_FRAG), mapped
+// logarithmically onto the octaves. Measured with a shape moving at known
+// speeds, the reading is ~0.8x the true speed (a contour's sides slide along
+// themselves) and, at the default mask easing, tops out near 0.7 once
+// movement passes ~1 screen per second. A body standing still reads
+// ~0.01-0.06 where the segmenter's edge flickers by a pixel or two; under
+// SPEED_LO that is faded out.
 const SPEED_LO = 0.08;
-const SPEED_HI = 0.65;
-// ... but that is only where the map starts. How fast a gesture reads depends
-// on how close the camera is: a phone at arm's length sees the same wave of a
-// hand sweep half the screen, and measured on a Pixel, movement read ~0.5
-// nearly always, so the note sat in the top sixth and the low notes never
-// came. So the map follows the body's own range: the mean and spread of its
-// (log) speed while it moves, learnt over about SPEED_LEARN seconds of
-// movement, ±SPEED_SPREAD spreads across the three octaves, and the spread
-// never narrows below SPEED_SD_MIN (or one steady pace would swing octaves).
-// It starts as exactly SPEED_LO..SPEED_HI.
-const SPEED_LEARN = 12;
-const SPEED_SPREAD = 1.5;
-const SPEED_SD_MIN = 0.35;
+// The lowest note is a fixed, comfortably slow pace, NOTE_FLOOR. The highest
+// is the body's own fast movements: the ~95th percentile (mean + TOP_Z
+// spreads) of its log speed while it moves, learnt over about SPEED_LEARN
+// seconds of movement and kept within TOP_MIN..TOP_MAX (the reading itself
+// saturates near 0.7, so a top above ~0.8 is out of reach). Only the top adapts,
+// and slowly, because a phone held close reads the same gesture several times
+// faster than a laptop's webcam across the room (on a Pixel, movement read
+// ~0.5 nearly always, and on a fixed scale every movement sang at the top).
+// Two ways of adapting failed before this: learning the centre of the body's
+// speeds chased the player, who slowed down to sing low only to have the
+// centre follow within seconds, so the low notes took slower and slower
+// movement; and letting the learnt spread narrow made three octaves out of a
+// mere 3x change of speed, so every movement shot to the top.
+const NOTE_FLOOR = 0.1;
+const SPEED_LEARN = 30;
+const TOP_Z = 1.65;
+const TOP_MIN = 0.4;
+const TOP_MAX = 0.8;
+// The note follows the speed over this long (s): a quick flick of the hand
+// should not fling it to the top and back.
+const NOTE_GLIDE = 0.2;
 // How much of the body moves, as the share of the screen its contour sweeps
 // per second: MOVE_LO is the least that sings, MOVE_HI full voice. The bottom
 // also follows the quietest sweep of the last few seconds (the flicker of a
@@ -71,7 +78,10 @@ const MOVE_GAIN = 1.0;   // the movement's feed into the resonators at full voic
 // Following movement, the chord stacked on the speed's note by Voices: each
 // added voice is every other scale note further up, at this share of the lead.
 const CHORD = [1, 0.7, 0.55, 0.45];
-const PITCH_LO = 110;    // A2: the demo's ripples then sing around A4-E5
+// The bottom note: A2 (the demo's ripples then sing around A4-E5). Phones ask
+// for A3 instead (see the constructor): their speakers hardly play below
+// ~200 Hz, and the bottom octave was sung but not heard.
+const PITCH_LO = 110;
 const SEMIS = 36;
 const PC_LO = 0;         // pitch class of the bottom band, counted up from A
 
@@ -87,7 +97,9 @@ const GLIDERS = 4;       // resonators available to the glide mode
 const BROWN_CORNER = 15.3;
 
 export class WaterAudio {
-  constructor(cols, rows) {
+  // pitchLo: the bottom note in Hz, an A so the scales stay rooted on A.
+  constructor(cols, rows, { pitchLo = PITCH_LO } = {}) {
+    this.pitchLo = pitchLo;
     this.cols = cols;
     this.rows = rows;
     this.ctx = null;
@@ -106,9 +118,10 @@ export class WaterAudio {
     this.drive = 0;        // movement feeding the resonators (speed mode), 0..1
     this.floor = MOVE_LO;  // the sweep of a body at rest: segmentation flicker
     this.moveU = 0.3;      // the movement's place in the three octaves, 0..1
-    // The body's own range of movement speeds, in log units (see SPEED_LEARN).
-    this.speedMu = Math.log(Math.sqrt(SPEED_LO * SPEED_HI));
-    this.speedVar = (Math.log(SPEED_HI / SPEED_LO) / (2 * SPEED_SPREAD)) ** 2;
+    // The body's own movement speeds, in log units (see NOTE_FLOOR): the
+    // highest note starts near 0.63 screens per second.
+    this.speedMu = Math.log(0.2);
+    this.speedVar = 0.7 * 0.7;
     this.moveCol = (cols - 1) / 2;
     this.move = { speed: 0, sweep: 0 }; // last measurement, for the console
     this.bank = [];      // one resonator per semitone, used snapped
@@ -328,10 +341,10 @@ export class WaterAudio {
       const learn = 1 - Math.exp(-dt / SPEED_LEARN);
       this.speedMu += (ls - this.speedMu) * learn;
       this.speedVar += ((ls - this.speedMu) ** 2 - this.speedVar) * learn;
-      const sd = Math.max(SPEED_SD_MIN, Math.sqrt(this.speedVar));
-      const u = clamp01(0.5 + (ls - this.speedMu) / (2 * SPEED_SPREAD * sd));
-      this.move.range = [Math.exp(this.speedMu - SPEED_SPREAD * sd), Math.exp(this.speedMu + SPEED_SPREAD * sd)];
-      const k = 1 - Math.exp(-dt / 0.1);
+      const top = Math.min(TOP_MAX, Math.max(TOP_MIN, Math.exp(this.speedMu + TOP_Z * Math.sqrt(this.speedVar))));
+      const u = clamp01(Math.log(speed / NOTE_FLOOR) / Math.log(top / NOTE_FLOOR));
+      this.move.range = [NOTE_FLOOR, top];
+      const k = 1 - Math.exp(-dt / NOTE_GLIDE);
       this.moveU += (u - this.moveU) * k;
       this.moveCol += (x / dm - this.moveCol) * k;
     }
@@ -436,7 +449,7 @@ export class WaterAudio {
     const free = new Set(this.gliders);
     const plan = new Map();
     for (const p of peaks) {
-      const f = PITCH_LO * Math.pow(2, p.pos / 12);
+      const f = this.pitchLo * Math.pow(2, p.pos / 12);
       let best = null, bestD = 5;
       for (const g of free) {
         if (g.level <= 0.01) continue;
@@ -578,8 +591,8 @@ export class WaterAudio {
     this.waterPan = ctx.createStereoPanner();
     this.lap.connect(this.waterLp).connect(gainNode(ctx, 0.5)).connect(this.waterPan).connect(this.waterBus);
 
-    for (let i = 0; i < SEMIS; i++) this.bank.push(this.#resonator(PITCH_LO * Math.pow(2, i / 12)));
-    for (let i = 0; i < GLIDERS; i++) this.gliders.push(this.#resonator(PITCH_LO * Math.pow(2, (i * 9 + 6) / 12)));
+    for (let i = 0; i < SEMIS; i++) this.bank.push(this.#resonator(this.pitchLo * Math.pow(2, i / 12)));
+    for (let i = 0; i < GLIDERS; i++) this.gliders.push(this.#resonator(this.pitchLo * Math.pow(2, (i * 9 + 6) / 12)));
 
     this.lastUpdate = ctx.currentTime;
   }

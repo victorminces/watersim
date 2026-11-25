@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Water Contour</title>
-<link rel="stylesheet" href="style.css?v=20261124173221">
+<link rel="stylesheet" href="style.css?v=20261124181715">
 </head>
 <body>
 <canvas id="stage"></canvas>
@@ -38,6 +38,7 @@
     <label><input type="checkbox" id="obstacle" checked> Solid obstacle <span class="sub">waves reflect off the contour</span></label>
     <label><input type="checkbox" id="ripples" checked> Motion ripples <span class="sub">moving contour pushes waves out</span></label>
     <label class="sl" data-needs="ripples">Ripple push <input type="range" id="push" min="0" max="6" step="any" value="0.6" data-mid></label>
+    <label class="sl" data-needs="ripples">Ripple length <input type="range" id="ripplelen" min="0" max="0.25" step="any" value="0.06" data-mid></label>
   </section>
 
   <section class="group">
@@ -138,6 +139,6 @@
 <button id="btn-panel" class="ghost small" hidden>Controls</button>
 <div id="toast" role="status" hidden></div>
 
-<script type="module" src="src/main.js?v=20261124173221"></script>
+<script type="module" src="src/main.js?v=20261124181715"></script>
 </body>
 </html>

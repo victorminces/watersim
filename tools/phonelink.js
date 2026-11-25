@@ -172,7 +172,10 @@
   (async function poll() {
     for (;;) {
       try {
-        const r = await fetch(`/__link/cmd?client=${ID}&after=${after}`);
+        // The server holds each poll up to 20 s. A connection that died silently
+        // (a phone hopping networks) would otherwise leave this await hanging
+        // for good, the heartbeat still arriving but no command ever run.
+        const r = await fetch(`/__link/cmd?client=${ID}&after=${after}`, { signal: AbortSignal.timeout(30000) });
         const cmds = await r.json();
         for (const cmd of cmds) {
           after = Math.max(after, cmd.id);

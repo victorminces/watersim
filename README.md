@@ -64,6 +64,7 @@ continuous; only Voices moves in whole steps.
 | Solid obstacle | The silhouette is a wall: waves reflect off the contour and cannot cross it. |
 | Motion ripples | A moving contour shoves the water, so the body radiates waves as it moves. |
 | Ripple push | How hard contour motion drives the water. |
+| Ripple length | How long the body's movement is smoothed before it pushes the water (0-0.25 s). A wave is as long as its speed divided by how fast its source changes, so a source that jitters frame to frame rings fine ripples at any wave speed; smoothed, only the slower motion makes waves and they come out longer. With a low Wave speed, this is how to get long, slow waves. |
 
 **Look**
 
@@ -177,14 +178,17 @@ the water is doing, measured over a 16×8 grid of zones laid over the pool.
   the contour moves picks the note: its speed in screens per second, measured
   on the GPU as the mask's change over its slope (a contour moving at *v*
   changes the mask by *v*·|∇m| per frame), weighted towards the parts that move
-  most. The three octaves span the body's own range of speeds, learnt while it
-  moves (the mean and spread of the log of its speed over roughly the last 12
-  seconds of movement), so a pace slower than usual sings low and a faster one
-  high, however near the camera is: a phone at arm's length reads the same
-  gesture as several times faster than a laptop's webcam across the room, and
-  on a fixed scale every movement sang at the top. It starts out as 0.08-0.65
-  screens per second, an octave per doubling of speed. A note the lead has
-  moved on from fades in ~0.3 s, so one voice is one note at a time. The flicker of a still body's edge is measured on a
+  most. The lowest note is a fixed, comfortably slow pace (0.1 screens per
+  second); the highest is the body's own fast movement, the ~95th percentile
+  of its speed learnt over roughly 30 seconds of moving, kept between 0.4 and
+  0.8. Only the top adapts, because a phone at arm's length reads the same
+  gesture as several times faster than a laptop's webcam across the room (on
+  a fixed scale every movement sang at the top). Adapting the middle instead
+  chased the player: slowing down to sing low, the middle followed within
+  seconds, and the low notes took slower and slower movement. The note follows
+  the speed over ~0.2 s, so a flick of the hand does not fling it to the top,
+  and a note the lead has moved on from fades in ~0.3 s, so one voice is one
+  note at a time. The flicker of a still body's edge is measured on a
   calmer copy of the mask, where back-and-forth noise cancels out, and gated by
   a floor that learns how much a body at rest seems to move.
 
@@ -257,4 +261,6 @@ drawing take ~3 ms a frame, so it runs at 60 fps, with ~11 new masks a second
 that the mask easing glides between. (Before: 8 fps, with the full 2560×1280
 camera frame segmented on the page.)
 
-On iPhone, the ring/silent switch mutes the sound.
+On phones the notes start an octave up, at A3 (220 Hz) rather than A2: a
+phone's speaker hardly plays below ~200 Hz, so the bottom octave was sung but
+not heard. On iPhone, the ring/silent switch mutes the sound.

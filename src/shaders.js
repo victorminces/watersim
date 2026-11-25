@@ -1,7 +1,8 @@
 // GLSL ES 3.00 shaders for the water simulation.
 //
 // Three passes run on a fixed grid (the "sim space", v = 0 at the bottom):
-//   MASK_FRAG   raw camera mask -> smoothed mask + signed per-frame change
+//   MASK_FRAG   raw camera mask -> smoothed mask, its signed per-frame change,
+//               a calm copy (for measuring speed) and the ripple source
 //   SPLAT_FRAG  adds point impulses (clicks, rain) to the height field
 //   SIM_FRAG    one step of the damped 2-D wave equation, with the silhouette
 //               acting as a reflecting wall and/or a wave source
@@ -47,6 +48,7 @@ uniform float uEase;      // temporal easing, 1 = no easing
 uniform float uSoft;      // 0..1, how much the contour is smoothed each frame
 uniform int uInvert;
 uniform int uEmpty;       // the latest mask is all one label: nobody there
+uniform float uSourceK;   // 1: the ripple source is this frame's movement; less: smoothed over frames
 ${CAM_UV}
 
 float rawAt(vec2 uv) {
@@ -88,7 +90,19 @@ void main() {
   // that only flickers back and forth (segmentation noise) mostly cancels
   // out in it, while one that really moves keeps its speed.
   float calm = mix(last.b, eased, 0.25);
-  outColor = vec4(eased, eased - prev, calm, calm - last.b);
+  // The ripple source: the movement, smoothed over the last few frames by
+  // uSourceK (Ripple length). Waves are as long as their speed over how fast
+  // their source changes (wavelength = speed / frequency), so a source that
+  // jitters frame to frame rings the water with fine ripples, at any wave
+  // speed; smoothed, only the body's slower motion makes waves, and they come
+  // out longer. The total push is unchanged, only spread out in time. A
+  // smoothed source lags a moving body, so a little of the push at its front
+  // lands inside it and is lost; up to ~0.25 s that only lowers the pool by a
+  // fraction of a ripple. Capped before smoothing, like the push itself (see
+  // SIM_FRAG), or a body appearing at once would bleed in over many frames,
+  // each under the cap.
+  float source = mix(last.a, clamp(eased - prev, -0.3, 0.3), uSourceK);
+  outColor = vec4(eased, eased - prev, calm, source);
 }`;
 
 export const SPLAT_FRAG = `#version 300 es
@@ -191,16 +205,17 @@ void main() {
     // Spread the impulse over a good many cells. A source only a cell or two
     // wide emits at the grid scale, which shows up as a fingerprint of ringing
     // around the body instead of a wave.
+    // The source is the mask's smoothed movement (.a, see MASK_FRAG).
     vec2 a = uTexel * 3.0, b = uTexel * 6.0;
-    float d = mk.g * 0.24
-      + texture(uMask, vUv + vec2(a.x, 0.0)).g * 0.11
-      + texture(uMask, vUv - vec2(a.x, 0.0)).g * 0.11
-      + texture(uMask, vUv + vec2(0.0, a.y)).g * 0.11
-      + texture(uMask, vUv - vec2(0.0, a.y)).g * 0.11
-      + texture(uMask, vUv + vec2(b.x, 0.0)).g * 0.08
-      + texture(uMask, vUv - vec2(b.x, 0.0)).g * 0.08
-      + texture(uMask, vUv + vec2(0.0, b.y)).g * 0.08
-      + texture(uMask, vUv - vec2(0.0, b.y)).g * 0.08;
+    float d = texture(uMask, vUv).a * 0.24
+      + texture(uMask, vUv + vec2(a.x, 0.0)).a * 0.11
+      + texture(uMask, vUv - vec2(a.x, 0.0)).a * 0.11
+      + texture(uMask, vUv + vec2(0.0, a.y)).a * 0.11
+      + texture(uMask, vUv - vec2(0.0, a.y)).a * 0.11
+      + texture(uMask, vUv + vec2(b.x, 0.0)).a * 0.08
+      + texture(uMask, vUv - vec2(b.x, 0.0)).a * 0.08
+      + texture(uMask, vUv + vec2(0.0, b.y)).a * 0.08
+      + texture(uMask, vUv - vec2(0.0, b.y)).a * 0.08;
     // Inject outside the body only, so the impulse survives the wall below.
     float outside = (uObstacle == 1) ? 1.0 - smoothstep(0.35, 0.6, mC) : 1.0;
     // Cap it: after a stall or a hidden tab the mask can jump a whole body
@@ -675,7 +690,8 @@ void main() {
 //   b = mean body coverage             -> the body silences what it covers
 //   a = mean contour movement          -> splashes
 // Movement band, over the contour only (where the mask has a slope):
-// measured on the mask's calm copy (see MASK_FRAG):
+// measured on the mask's calm copy (see MASK_FRAG), against the same copy one
+// frame ago (uMaskPrev: the ping-pong's other half, still holding it):
 //   r = mean |dm/dt|                   -> how much of the body moves
 //   g = mean |dm/dt|^2 / |grad m|, x100 -> divided by r, how fast it moves:
 //       a contour moving at v cells per frame changes the mask by v |grad m|
@@ -688,6 +704,7 @@ out vec4 outColor;
 
 uniform sampler2D uSim;
 uniform sampler2D uMask;
+uniform sampler2D uMaskPrev;
 uniform vec2 uZones;
 uniform vec2 uTexel;     // of the grid
 uniform float uVelScale; // lifts tiny per-substep velocities clear of half-float underflow
@@ -707,7 +724,7 @@ void main() {
         float gx = texture(uMask, uv + vec2(uTexel.x, 0.0)).b - texture(uMask, uv - vec2(uTexel.x, 0.0)).b;
         float gy = texture(uMask, uv + vec2(0.0, uTexel.y)).b - texture(uMask, uv - vec2(0.0, uTexel.y)).b;
         float grad = 0.5 * length(vec2(gx, gy));
-        float dm = grad > 0.004 ? abs(m.a) : 0.0;
+        float dm = grad > 0.004 ? abs(m.b - texture(uMaskPrev, uv).b) : 0.0;
         acc += vec4(dm, dm * dm / max(grad, 0.004) * 100.0, grad, 0.0);
       } else {
         vec2 s = texture(uSim, uv).rg;

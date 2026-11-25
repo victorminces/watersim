@@ -78,7 +78,8 @@ let trail = null, trailFresh = true; // the liquid-trails picture (look 5)
 let progGrate, grate = null;          // ripple structure for diffraction (look 8)
 
 let statsTarget, readback;
-const audio = new WaterAudio(ZONES_X, ZONES_Y);
+// Phones start the notes an octave up, at A3: their speakers barely play below ~200 Hz.
+const audio = new WaterAudio(ZONES_X, ZONES_Y, { pitchLo: TOUCH ? 220 : 110 });
 let lastFrame = 0, frameDt = 1 / 60;
 let sim, mask;                       // PingPong buffers
 let texRawCam, texRawDemo, texVideo, texBlank;
@@ -168,19 +169,16 @@ async function startCamera() {
   startAudio(); // first, while still inside the tap that allows sound
   try {
     await openCamera();
+    // The water and the picture start now; body detection loads behind them
+    // (a notice says so, see watchCamera). On a phone that load can take a
+    // while over mobile data, and with the start screen waiting on it, a tap
+    // on Start camera looked like it did nothing.
     if (!segmenter) {
-      bootMsg.textContent = 'Loading body detection…';
       segmenter = new Segmenter({ maxSide: TOUCH ? 384 : 0, worker: TOUCH });
-      try {
-        await segmenter.load();
-      } catch (err) {
+      segmenter.load().catch((err) => {
         console.error(err);
-        segmenter = null;
-        stopCamera();
-        bootMsg.textContent = 'Could not load body detection (offline?). Running without a camera instead.';
-        startDemo();
-        return;
-      }
+        segmenter.failed = true;
+      });
     }
     source = 'camera';
     begin();
@@ -309,6 +307,9 @@ toastEl.addEventListener('click', () => {
 // track itself: "ended" when the camera is gone, "muted" when it cannot
 // deliver (screen locked, another app took it).
 let cameraSince = 0, cameraWarned = false;
+// Detection's own clock: from the later of the camera starting and detection
+// becoming ready, so a slow load does not count as detection failing.
+const detectSince = () => Math.max(cameraSince, segmenter.readyAt);
 function watchCamera(now) {
   if (!stream) return; // restarting: the restart reports for itself
   const track = stream.getVideoTracks()[0];
@@ -319,10 +320,14 @@ function watchCamera(now) {
   } else if (track.muted || !video.videoWidth) {
     msg = 'The camera stopped sending pictures. Tap here to restart it.';
     action = restartCamera;
-  } else if (segmenter.generation === 0 && now - cameraSince > 8000) {
+  } else if (segmenter.failed) {
+    msg = 'Could not load body detection (offline?). The water still answers your touch.';
+  } else if (!segmenter.ready) {
+    msg = cpuTried ? 'Switching body detection to the CPU…' : 'Loading body detection…';
+  } else if (segmenter.generation === 0 && now - detectSince() > 8000) {
     msg = 'Body detection has not started. This device may be too slow for it.';
   } else if (TOUCH && !cpuTried && !segmenter.varied && segmenter.delegate === 'GPU' &&
-             segmenter.generation > 30 && now - cameraSince > 2500) {
+             segmenter.generation > 30 && now - detectSince() > 2500) {
     // A few seconds of masks with nobody in them, on a phone's GPU: on some
     // phones (a Pixel's PowerVR, for one) that path runs but returns blanks.
     // Try the CPU once. A selfie camera rarely has nobody in front of it, and
@@ -330,7 +335,7 @@ function watchCamera(now) {
     // where an empty room at start is the likelier story.)
     switchToCpu();
     msg = 'Switching body detection to the CPU…';
-  } else if (!segmenter.varied && now - cameraSince > 6000) {
+  } else if (!segmenter.varied && now - detectSince() > 6000) {
     msg = 'Body detection does not see anyone yet. Step back so your head and shoulders are in view.';
   }
   if (msg) {
@@ -452,9 +457,13 @@ function runMaskPass(rawTex, xform) {
     .f('uSoft', +ui.soft.value)
     // Invert corrects the segmenter's label order; the demo figure needs none.
     .i('uInvert', source === 'camera' && ui.invert.checked ? 1 : 0)
-    .i('uEmpty', source === 'camera' && segmenter.generation > 0 && segmenter.uniform ? 1 : 0)
+    // No mask yet (detection still loading) counts as nobody there, not as
+    // whatever an empty texture inverts to: all body, and no water at all.
+    .i('uEmpty', source === 'camera' && (segmenter.generation === 0 || segmenter.uniform) ? 1 : 0)
     .i('uMirror', ui.mirror.checked ? 1 : 0)
-    .v4('uCamXform', xform);
+    .v4('uCamXform', xform)
+    // Ripple length: how long, in seconds, the ripple source is smoothed over.
+    .f('uSourceK', +ui.ripplelen.value > 0 ? 1 - Math.exp(-frameDt / +ui.ripplelen.value) : 1);
   quad.draw();
   mask.swap();
 }
@@ -570,6 +579,7 @@ function runReducePass() {
   progReduce.use()
     .tex('uSim', sim.read.tex)
     .tex('uMask', mask.read.tex)
+    .tex('uMaskPrev', mask.write.tex) // after the mask pass's swap: last frame's mask
     .v2('uZones', ZONES_X, ZONES_Y)
     .v2('uTexel', 1 / simW, 1 / simH)
     .f('uVelScale', VEL_SCALE);
@@ -681,7 +691,7 @@ function note(msg) {
 // ---------------------------------------------------------------- ui
 
 const ui = {};
-for (const id of ['obstacle', 'ripples', 'look', 'palette', 'speed', 'damp', 'push',
+for (const id of ['obstacle', 'ripples', 'look', 'palette', 'speed', 'damp', 'push', 'ripplelen',
   'relief', 'refract', 'rain', 'mirror', 'invert', 'soft', 'ease', 'showmask',
   'sound', 'volume', 'melody', 'voices', 'clarity', 'slush', 'water', 'pitch', 'scale', 'detail', 'framing',
   'deform', 'cycle', 'grating', 'fx', 'lightaz', 'sky', 'sunh', 'clouds', 'depth', 'causticamt']) {

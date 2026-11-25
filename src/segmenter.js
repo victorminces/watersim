@@ -34,6 +34,8 @@ export class Segmenter {
     this.stamp = 0;
     this.lastVideoTime = -1;
     this.delegate = null;
+    this.readyAt = Infinity; // performance.now() when it last became ready
+    this.failed = false;     // set by the app when loading failed
     // What the masks say about themselves, for working out which label is the
     // person and whether detection works at all on this device:
     this.cornerOn = 0;     // share of the top corners carrying the non-zero label
@@ -86,6 +88,7 @@ export class Segmenter {
   }
 
   #isReady(delegate) {
+    this.readyAt = performance.now();
     this.delegate = delegate;
     this.varied = false;
     this.busy = false;
